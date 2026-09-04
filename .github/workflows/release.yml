@@ -74,7 +74,12 @@ jobs:
           path: ~/go/bin/wails3*
           key: wails3-${{ runner.os }}-${{ runner.arch }}-${{ env.WAILS_VERSION }}
 
+      # The CLI is pure Go, but building it with cgo on drags in
+      # internal/operatingsystem, which demands GTK4 headers this job does not
+      # have. Only this step turns cgo off; the app build below needs it on.
       - name: Install wails3
+        env:
+          CGO_ENABLED: "0"
         run: |
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
           command -v wails3 >/dev/null || go install github.com/wailsapp/wails/v3/cmd/wails3@${WAILS_VERSION}

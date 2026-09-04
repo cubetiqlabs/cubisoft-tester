@@ -62,6 +62,12 @@ jobs:
   frontend:
     name: Frontend
     runs-on: ubuntu-24.04
+    # Binding generation type-checks the Go package. The `server` tag drops
+    # pkg/application's GUI code but not internal/operatingsystem, which is
+    # only guarded by `cgo` — so CGO must be off too, or this job needs the
+    # whole GTK/WebKit toolchain to generate a few TypeScript files.
+    env:
+      CGO_ENABLED: "0"
     steps:
       - uses: actions/checkout@v7
 

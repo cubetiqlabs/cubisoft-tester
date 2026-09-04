@@ -12,3 +12,4 @@ build/android/gen/
 .gstack/
 .DS_Store
 /cubisoft-tester
+build/linux/*.desktop
