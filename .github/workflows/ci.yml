@@ -42,6 +42,11 @@ jobs:
           go-version-file: go.mod
           cache-dependency-path: go.sum
 
+      # main.go embeds frontend/dist, and go:embed fails on an empty match.
+      # These tests never serve the UI, so a placeholder is enough and saves
+      # this job an npm install.
+      - run: mkdir -p frontend/dist && touch frontend/dist/.gitkeep
+
       # The `server` tag drops the native GUI bindings, so the tests build
       # without GTK/WebKit and this job needs no apt step at all.
       - run: test -z "$(gofmt -l *.go)" || { gofmt -d *.go; exit 1; }
@@ -82,7 +87,7 @@ jobs:
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
           command -v wails3 >/dev/null || go install github.com/wailsapp/wails/v3/cmd/wails3@${WAILS_VERSION}
 
-      - run: wails3 task common:generate:bindings
+      - run: wails3 task common:generate:bindings BUILD_FLAGS="-tags server -buildvcs=false"
       - run: npm ci
         working-directory: frontend
       - run: npx tsc --noEmit

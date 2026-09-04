@@ -79,11 +79,15 @@ jobs:
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
           command -v wails3 >/dev/null || go install github.com/wailsapp/wails/v3/cmd/wails3@${WAILS_VERSION}
 
+      # Wails v3 defaults to GTK4 + webkitgtk-6.0, which only exists on very
+      # recent distros. Building with the gtk3 tag against webkit2gtk-4.1 runs
+      # on Ubuntu 22.04, Debian 12 and everything newer.
       - name: Install Linux GUI dependencies
         if: matrix.goos == 'linux'
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends libgtk-3-dev libwebkit2gtk-4.1-dev
+          sudo apt-get install -y --no-install-recommends \
+            libgtk-3-dev libwebkit2gtk-4.1-dev libx11-dev
 
       - name: Build macOS bundle
         if: matrix.goos == 'darwin'
@@ -97,7 +101,7 @@ jobs:
       - name: Build Linux binary
         if: matrix.goos == 'linux'
         run: |
-          wails3 task linux:build ARCH=${{ matrix.arch }}
+          wails3 task linux:build ARCH=${{ matrix.arch }} EXTRA_TAGS=gtk3
           mkdir -p dist
           tar -czf "dist/$ASSET" -C bin "$APP_NAME"
 

@@ -47,7 +47,10 @@ release checksums before anything is replaced. Nothing installs without a click.
 
 ## Local development
 
-Needs Go 1.25+, Node 22+, and on Linux `libgtk-3-dev` and `libwebkit2gtk-4.1-dev`.
+Needs Go 1.25+ and Node 22+. On Linux, either `libgtk-4-dev` and
+`libwebkitgtk-6.0-dev` (the Wails default), or `libgtk-3-dev` and
+`libwebkit2gtk-4.1-dev` with `EXTRA_TAGS=gtk3` — which is what the released
+Linux builds use, since GTK4 WebKit is missing on anything older than Ubuntu 24.04.
 
 ```sh
 go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-beta.16
@@ -60,6 +63,7 @@ wails3 task package  # .app bundle on macOS
 Tests:
 
 ```sh
+mkdir -p frontend/dist    # main.go embeds it; go:embed fails on an empty match
 go test -tags server .    # unit tests, no server, no GUI toolchain needed
 
 docker run -d --rm -e MYSQL_ROOT_PASSWORD=testpw -e MYSQL_DATABASE=testdb \
