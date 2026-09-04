@@ -1,0 +1,91 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  WAILS_VERSION: v3.0.0-beta.16
+
+jobs:
+  go:
+    name: Go / MySQL ${{ matrix.mysql }}
+    runs-on: ubuntu-24.04
+    env:
+      CGO_ENABLED: "0"
+    strategy:
+      fail-fast: false
+      matrix:
+        mysql: ["5.7", "8.0"]
+    services:
+      mysql:
+        image: mysql:${{ matrix.mysql }}
+        env:
+          MYSQL_ROOT_PASSWORD: testpw
+          MYSQL_DATABASE: testdb
+        ports: ["3306:3306"]
+        options: >-
+          --health-cmd="mysqladmin ping -ptestpw"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=30
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      # The `server` tag drops the native GUI bindings, so the tests build
+      # without GTK/WebKit and this job needs no apt step at all.
+      - run: test -z "$(gofmt -l *.go)" || { gofmt -d *.go; exit 1; }
+      - run: go vet -tags server .
+      - run: go test -tags server .
+
+      - name: Live tests against MySQL ${{ matrix.mysql }}
+        env:
+          MYSQLTEST_HOST: 127.0.0.1
+          MYSQLTEST_PORT: "3306"
+        run: go test -tags server -run Live -v .
+
+  frontend:
+    name: Frontend
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Cache wails3
+        uses: actions/cache@v6
+        with:
+          path: ~/go/bin/wails3
+          key: wails3-${{ runner.os }}-${{ runner.arch }}-${{ env.WAILS_VERSION }}
+
+      - name: Install wails3
+        run: |
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+          command -v wails3 >/dev/null || go install github.com/wailsapp/wails/v3/cmd/wails3@${WAILS_VERSION}
+
+      - run: wails3 task common:generate:bindings
+      - run: npm ci
+        working-directory: frontend
+      - run: npx tsc --noEmit
+        working-directory: frontend
+      - run: npm run build
+        working-directory: frontend

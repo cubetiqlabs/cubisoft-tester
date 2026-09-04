@@ -1,0 +1,137 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to build and publish (e.g. v1.2.3)"
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.event.inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  APP_NAME: mysqltester
+  WAILS_VERSION: v3.0.0-beta.16
+
+jobs:
+  # Six native jobs in parallel. Each does its own frontend build: sharing one
+  # prebuilt frontend would add a serial job in front of the matrix and cost
+  # more wall clock than the ~20s it saves per job.
+  build:
+    name: ${{ matrix.goos }}/${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: macos-15, goos: darwin, arch: arm64, ext: zip }
+          - { runner: macos-15, goos: darwin, arch: amd64, ext: zip }
+          - { runner: ubuntu-24.04, goos: linux, arch: amd64, ext: tar.gz }
+          - { runner: ubuntu-24.04-arm, goos: linux, arch: arm64, ext: tar.gz }
+          # Wails on Windows is CGO-free, so both arches cross-build on one runner.
+          - { runner: windows-2025, goos: windows, arch: amd64, ext: zip }
+          - { runner: windows-2025, goos: windows, arch: arm64, ext: zip }
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Resolve version
+        run: |
+          tag="${{ github.event.inputs.tag || github.ref_name }}"
+          version="${tag#v}"
+          file=$(tr -d '[:space:]' < version.txt)
+          # The embedded version is what the updater compares against, so a
+          # mismatch here would ship an app that never sees its own release.
+          [ "$version" = "$file" ] || { echo "tag $tag does not match version.txt ($file)"; exit 1; }
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+          echo "ASSET=${APP_NAME}_${version}_${{ matrix.goos }}_${{ matrix.arch }}.${{ matrix.ext }}" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Cache wails3
+        uses: actions/cache@v6
+        with:
+          path: ~/go/bin/wails3*
+          key: wails3-${{ runner.os }}-${{ runner.arch }}-${{ env.WAILS_VERSION }}
+
+      - name: Install wails3
+        run: |
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+          command -v wails3 >/dev/null || go install github.com/wailsapp/wails/v3/cmd/wails3@${WAILS_VERSION}
+
+      - name: Install Linux GUI dependencies
+        if: matrix.goos == 'linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends libgtk-3-dev libwebkit2gtk-4.1-dev
+
+      - name: Build macOS bundle
+        if: matrix.goos == 'darwin'
+        run: |
+          wails3 task darwin:package ARCH=${{ matrix.arch }}
+          mv "bin/${APP_NAME}.app" "bin/MySQL Tester.app"
+          mkdir -p dist
+          # ditto keeps the bundle's symlinks and permissions; plain zip does not.
+          ditto -c -k --keepParent "bin/MySQL Tester.app" "dist/$ASSET"
+
+      - name: Build Linux binary
+        if: matrix.goos == 'linux'
+        run: |
+          wails3 task linux:build ARCH=${{ matrix.arch }}
+          mkdir -p dist
+          tar -czf "dist/$ASSET" -C bin "$APP_NAME"
+
+      - name: Build Windows binary
+        if: matrix.goos == 'windows'
+        run: |
+          wails3 task windows:build ARCH=${{ matrix.arch }}
+          mkdir -p dist
+          pwsh -c "Compress-Archive -Path 'bin/$APP_NAME.exe' -DestinationPath 'dist/$ASSET' -Force"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ env.ASSET }}
+          path: dist/${{ env.ASSET }}
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    name: Publish release
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Generate checksums
+        working-directory: dist
+        run: sha256sum *.zip *.tar.gz > checksums.txt && cat checksums.txt
+
+      - uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          files: dist/*
+          generate_release_notes: true
+          fail_on_unmatched_files: true

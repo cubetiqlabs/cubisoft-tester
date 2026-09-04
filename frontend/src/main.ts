@@ -1,4 +1,4 @@
-import { Events } from "@wailsio/runtime";
+import { Events, Updater } from "@wailsio/runtime";
 import { Tester } from "../bindings/github.com/sombochea/cubisoft-tester";
 import type {
     Config, DiagnoseResult, Hop, LatencyResult, Phase, Progress,
@@ -18,6 +18,8 @@ const escapeMap: Record<string, string> = { "&": "&amp;", "<": "&lt;", ">": "&gt
 const esc = (s: unknown) => String(s ?? "").replace(/[&<>"']/g, (c) => escapeMap[c]);
 
 const ms = (n: number) => `${n.toFixed(n < 10 ? 2 : 1)} ms`;
+// Go marshals a nil slice as null, and the generated bindings type it that way.
+const list = <T,>(v: T[] | null | undefined): T[] => v ?? [];
 const int = (n: number) => Math.round(n).toLocaleString();
 
 let currentTab: Tab = "diagnose";
@@ -110,8 +112,8 @@ $("load-dbs").addEventListener("click", async () => {
     setStatus("Listing databases…", "busy");
     try {
         const dbs = await Tester.ListDatabases(config());
-        $("db-list").innerHTML = dbs.map((d) => `<option value="${esc(d)}"></option>`).join("");
-        setStatus(`${dbs.length} database(s) available. Click the Database field to pick one.`, "ok");
+        $("db-list").innerHTML = list(dbs).map((d) => `<option value="${esc(d)}"></option>`).join("");
+        setStatus(`${list(dbs).length} database(s) available. Click the Database field to pick one.`, "ok");
     } catch (err) {
         setStatus(String(err), "bad");
     }
@@ -176,7 +178,7 @@ async function run() {
 }
 
 function failedStep(r: DiagnoseResult): string {
-    const bad = r.steps.find((s) => !s.ok);
+    const bad = list(r.steps).find((s) => !s.ok);
     return bad ? `Failed at: ${bad.name}` : "Failed.";
 }
 
@@ -216,13 +218,13 @@ function renderDiagnose(r: DiagnoseResult) {
         ? `<div class="verdict ok">Connection healthy — ${esc(r.server.flavor)} ${esc(r.server.version)} at ${esc(r.server.resolvedAddr)}, ${ms(r.totalMs)} total.</div>`
         : `<div class="verdict bad">${esc(failedStep(r))}</div>`;
 
-    const steps = card("Connection path", r.steps.map(stepRow).join(""), true);
+    const steps = card("Connection path", list(r.steps).map(stepRow).join(""), true);
     const server = r.server.version ? card("Server", serverInfo(r.server)) : "";
-    const grants = r.server.grants.length
-        ? card("Privileges", `<div class="mono dim">${r.server.grants.map((g) => esc(g)).join("<br/>")}</div>`)
+    const grants = list(r.server.grants).length
+        ? card("Privileges", `<div class="mono dim">${list(r.server.grants).map((g) => esc(g)).join("<br/>")}</div>`)
         : "";
 
-    return verdict + steps + server + noteList("Warnings", r.warnings) + grants;
+    return verdict + steps + server + noteList("Warnings", list(r.warnings)) + grants;
 }
 
 function stepRow(s: Step) {
@@ -267,8 +269,8 @@ function uptime(sec: number) {
 /* ---------- latency ---------- */
 
 function renderLatency(r: LatencyResult) {
-    const verdict = `<div class="verdict ${r.warnings.length ? "" : "ok"}">${esc(r.verdict)}</div>`;
-    return verdict + r.series.map(seriesCard).join("") + noteList("Warnings", r.warnings);
+    const verdict = `<div class="verdict ${list(r.warnings).length ? "" : "ok"}">${esc(r.verdict)}</div>`;
+    return verdict + list(r.series).map(seriesCard).join("") + noteList("Warnings", list(r.warnings));
 }
 
 function seriesCard(s: Series) {
@@ -284,7 +286,7 @@ function seriesCard(s: Series) {
         ["max", ms(s.stats.max)],
         ["jitter", ms(s.stats.jitter)],
         ["loss", `${s.lost}/${s.sent}`],
-    ]) + spark(s.samples) + (s.error ? `<div class="err mono">${esc(s.error)}</div>` : "");
+    ]) + spark(list(s.samples)) + (s.error ? `<div class="err mono">${esc(s.error)}</div>` : "");
     return card(s.name, body);
 }
 
@@ -302,7 +304,7 @@ function renderTrace(r: TraceResult) {
         ["biggest jump", r.longestHop ? `hop ${r.longestHop}` : "—"],
     ]);
 
-    const rows = r.hops.map(hopRow).join("");
+    const rows = list(r.hops).map(hopRow).join("");
     const table = card("Path", `<div class="scroll-x"><table>
         <thead><tr><th class="num">#</th><th>Address</th><th>Hostname</th><th class="num">probes</th><th class="num">avg</th></tr></thead>
         <tbody>${rows}</tbody></table></div>`, true);
@@ -312,7 +314,7 @@ function renderTrace(r: TraceResult) {
 }
 
 function hopRow(h: Hop) {
-    const probes = h.rtts.map((v) => (v < 0 ? "*" : v.toFixed(1))).join("  ");
+    const probes = list(h.rtts).map((v) => (v < 0 ? "*" : v.toFixed(1))).join("  ");
     const silent = !h.addr;
     return `<tr class="${silent ? "bad" : ""}">
         <td class="num">${h.ttl}</td>
@@ -326,14 +328,15 @@ function hopRow(h: Hop) {
 /* ---------- speed test ---------- */
 
 function renderSpeed(r: SpeedResult) {
-    const failed = r.phases.find((p) => !p.ok);
+    const phases = list(r.phases);
+    const failed = phases.find((p) => !p.ok);
     const verdict = r.ok
         ? `<div class="verdict ok">${esc(r.summary)}</div>`
         : `<div class="verdict bad">Stopped at “${esc(failed?.name ?? "unknown phase")}”: ${esc(failed?.error ?? "")}${failed?.hint ? ` — ${esc(failed.hint)}` : ""}</div>`;
 
-    const insert = r.phases.find((p) => p.name.startsWith("Insert"));
-    const scan = r.phases.find((p) => p.name === "Select: full table scan");
-    const tx = r.phases.find((p) => p.name.startsWith("Transactions: ") && p.opsPerSec > 0);
+    const insert = phases.find((p) => p.name.startsWith("Insert"));
+    const scan = phases.find((p) => p.name === "Select: full table scan");
+    const tx = phases.find((p) => p.name.startsWith("Transactions: ") && p.opsPerSec > 0);
     const tiles = metrics([
         ["write", insert ? `${insert.miBPerSec.toFixed(2)} MiB/s` : "—"],
         ["read", scan ? `${scan.miBPerSec.toFixed(2)} MiB/s` : "—"],
@@ -345,9 +348,9 @@ function renderSpeed(r: SpeedResult) {
 
     const table = card(`Phases — table ${r.table}`, `<div class="scroll-x"><table>
         <thead><tr><th></th><th>Phase</th><th class="num">time</th><th class="num">rows</th><th class="num">rows/s</th><th class="num">MiB/s</th><th>notes</th></tr></thead>
-        <tbody>${r.phases.map(phaseRow).join("")}</tbody></table></div>`, true);
+        <tbody>${phases.map(phaseRow).join("")}</tbody></table></div>`, true);
 
-    return verdict + tiles + table + noteList("Warnings", r.warnings);
+    return verdict + tiles + table + noteList("Warnings", list(r.warnings));
 }
 
 function phaseRow(p: Phase) {
@@ -362,6 +365,28 @@ function phaseRow(p: Phase) {
         <td class="wrap dim">${esc(note)}</td>
     </tr>`;
 }
+
+/* ---------- updates ---------- */
+
+const updateBtn = $<HTMLButtonElement>("update");
+
+Tester.Version().then((v) => ($("version").textContent = v === "dev" ? "local build" : `v${v}`));
+
+Events.On(Updater.Events.UpdateAvailable, (e: { data: { version: string } }) => {
+    updateBtn.textContent = `Update to v${e.data.version}`;
+    updateBtn.hidden = false;
+});
+
+// Both buttons open the framework's update window; it renders "up to date" too.
+const checkUpdates = async () => {
+    try {
+        await Tester.CheckForUpdates();
+    } catch (err) {
+        setStatus(String(err), "bad");
+    }
+};
+updateBtn.addEventListener("click", () => void checkUpdates());
+$("check-update").addEventListener("click", () => void checkUpdates());
 
 /* ---------- boot ---------- */
 

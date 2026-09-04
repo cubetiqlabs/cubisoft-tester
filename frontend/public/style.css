@@ -163,6 +163,43 @@ input:focus, select:focus {
 .status[data-state="bad"]  { border-left-color: var(--bad);  color: var(--text); }
 .status[data-state="busy"] { border-left-color: var(--accent); }
 
+.about {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 10px;
+    font-size: 11px;
+    color: var(--text-faint);
+}
+
+.about #version { font-family: var(--mono); }
+
+.linkish {
+    padding: 0;
+    font: inherit;
+    color: var(--text-dim);
+    background: none;
+    border: 0;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+    cursor: pointer;
+}
+
+.linkish:hover { color: var(--text); }
+
+.update {
+    width: 100%;
+    padding: 8px 10px;
+    font: inherit;
+    font-weight: 550;
+    text-align: left;
+    color: #fff;
+    background: var(--accent);
+    border: 0;
+    border-radius: 6px;
+    cursor: pointer;
+}
+
 /* ---------- main ---------- */
 
 .main {

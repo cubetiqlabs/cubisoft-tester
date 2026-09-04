@@ -12,3 +12,4 @@ build/android/gen/
 .gstack/
 !frontend/dist/.gitkeep
 .DS_Store
+/cubisoft-tester

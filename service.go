@@ -63,6 +63,21 @@ func (t *Tester) progress(kind, message string, pct float64) {
 	app.Event.Emit("progress", Progress{Kind: kind, Message: message, Pct: pct})
 }
 
+// Version is the running version, or "dev" for a local build.
+func (t *Tester) Version() string { return version }
+
+// CheckForUpdates opens the framework's update window, which reports "up to
+// date" or walks download, verify, install and restart. Released builds only.
+func (t *Tester) CheckForUpdates() error {
+	app := application.Get()
+	if app == nil || !isRelease(version) {
+		return errors.New("this is a local build; updates apply to releases downloaded from GitHub")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	return app.Updater.CheckAndInstall(ctx)
+}
+
 // ListDatabases returns the schemas this account can see, for the UI dropdown.
 func (t *Tester) ListDatabases(cfg Config) ([]string, error) {
 	// Deliberately not registered as the cancellable run: clicking "List" while

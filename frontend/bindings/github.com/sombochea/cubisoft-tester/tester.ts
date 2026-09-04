@@ -23,6 +23,14 @@ export function Cancel(): $CancellablePromise<void> {
 }
 
 /**
+ * CheckForUpdates opens the framework's update window, which reports "up to
+ * date" or walks download, verify, install and restart. Released builds only.
+ */
+export function CheckForUpdates(): $CancellablePromise<void> {
+    return $Call.ByID(14306916);
+}
+
+/**
  * Diagnose walks the connection one layer at a time and stops at the first failure.
  * Named results so the deferred TotalMs assignment lands in what the caller gets.
  */
@@ -63,4 +71,11 @@ export function SpeedTest(opts: $models.SpeedOptions): $CancellablePromise<$mode
  */
 export function Trace(opts: $models.TraceOptions): $CancellablePromise<$models.TraceResult> {
     return $Call.ByID(853838722, opts);
+}
+
+/**
+ * Version is the running version, or "dev" for a local build.
+ */
+export function Version(): $CancellablePromise<string> {
+    return $Call.ByID(3138310587);
 }

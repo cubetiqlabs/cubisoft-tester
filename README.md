@@ -1,77 +1,103 @@
-# Cubisoft - MySQL Tester
+# MySQL Tester
 
-A desktop app (Wails v3 + Go) for diagnosing a MySQL connection from the machine
-that actually has the problem — the client. Targets MySQL 5.6 through 8.x.
+Desktop app for diagnosing a MySQL connection from the machine that actually has
+the problem. Targets MySQL 5.6 through 8.x. Built with Go and [Wails v3](https://v3.wails.io).
 
-Four tools, all against a real connection:
-
-| Tab | What it answers |
+| Tab | Answers |
 |---|---|
-| **Diagnose** | Where exactly does the connection break, and what is this server configured like? |
-| **Latency** | How long does a round trip take, how much does it vary, and what does a fresh connection cost? |
-| **Trace route** | What network path do packets take, and is the MySQL port itself reachable? |
-| **Speed test** | How fast can this client actually insert, read, update, commit and delete? |
+| **Diagnose** | Where does the connection break, and how is this server configured? |
+| **Latency** | How long is a round trip, how much does it vary, what does a new connection cost? |
+| **Trace route** | What path do packets take, and is the MySQL port reachable? |
+| **Speed test** | How fast can this client insert, read, update, commit and delete? |
 
-## Running it
+## Install
+
+**macOS / Linux**
 
 ```sh
-go install github.com/wailsapp/wails/v3/cmd/wails3@latest
-wails3 task dev      # live reload
-wails3 task build    # binary in bin/
-wails3 task package  # .app / .exe / AppImage
+curl -fsSL https://raw.githubusercontent.com/cubetiqlabs/cubisoft-tester/main/scripts/install.sh | sh
 ```
 
-## What each tab does
+**Windows** (PowerShell)
 
-**Diagnose** times DNS, TCP, the MySQL handshake, auth, a privilege check, a write
-probe and a query round trip *separately*, and stops at the first failure. That
-split is the point: "the database is slow" usually means one specific layer is
-slow, and this says which. Failures come with a hint — access denied points at
-`user@host` grants, a timeout points at a firewall rather than a busy server.
-It then reads the server's settings and flags the ones that bite later:
-`read_only`, a short `wait_timeout`, a small `max_allowed_packet`, a missing
-`STRICT` mode, an unencrypted connection, clock skew, connections near the cap,
-and reverse-DNS-on-connect (`skip_name_resolve`).
+```powershell
+irm https://raw.githubusercontent.com/cubetiqlabs/cubisoft-tester/main/scripts/install.ps1 | iex
+```
 
-**Latency** runs three series — bare TCP handshake, `SELECT 1` on an open
-connection, and a full cold connect — and reports min/median/mean/p95/p99/max,
-jitter and loss for each, with a bar per probe in arrival order. The gap between
-the three is what tells you how to size a pool.
+Both scripts pick the right build for your OS and CPU, verify the SHA-256 against
+the release's `checksums.txt`, and install. Set `VERSION=1.2.3` to pin one.
 
-**Trace route** is a TTL-limited ICMP traceroute plus a TCP connect to the MySQL
-port. It runs unprivileged on macOS and on Linux where `ping_group_range` allows
-it, and falls back to raw ICMP (root) otherwise; if neither works it says so and
-the TCP check still stands. Servers that drop ICMP show as `*` — the TCP result
-is the one that answers "can I reach the database".
+Prefer to do it yourself? Grab the archive from the
+[releases page](https://github.com/cubetiqlabs/cubisoft-tester/releases):
 
-**Speed test** creates a throwaway `conntest_*` table in the selected database and
-runs real work through it: batched multi-row inserts (optionally across several
-connections), a full table scan, point lookups by primary key, a bulk update,
-timed commit cycles, a rollback correctness check, and a delete. It drops the
-table afterwards, including when the run is cancelled. Batch size is capped to fit
-the server's `max_allowed_packet`.
+| Platform | Asset | Where to put it |
+|---|---|---|
+| macOS (Apple silicon / Intel) | `..._darwin_arm64.zip` / `..._darwin_amd64.zip` | `/Applications` |
+| Linux (x86-64 / ARM64) | `..._linux_amd64.tar.gz` / `..._linux_arm64.tar.gz` | anywhere on `PATH` |
+| Windows (x86-64 / ARM64) | `..._windows_amd64.zip` / `..._windows_arm64.zip` | anywhere you like |
 
-## Tests
+macOS builds are ad-hoc signed, not notarised. If Gatekeeper objects, run
+`xattr -dr com.apple.quarantine "/Applications/MySQL Tester.app"`.
+
+## Updates
+
+The app checks GitHub for a newer release on startup and offers it in the sidebar.
+"Check for updates" does the same on demand. Downloads are verified against the
+release checksums before anything is replaced. Nothing installs without a click.
+
+## Local development
+
+Needs Go 1.25+, Node 22+, and on Linux `libgtk-3-dev` and `libwebkit2gtk-4.1-dev`.
 
 ```sh
-go test ./                                   # unit tests, no server needed
+go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-beta.16
+
+wails3 task dev      # live reload
+wails3 task build    # binary in bin/
+wails3 task package  # .app bundle on macOS
+```
+
+Tests:
+
+```sh
+go test -tags server .    # unit tests, no server, no GUI toolchain needed
 
 docker run -d --rm -e MYSQL_ROOT_PASSWORD=testpw -e MYSQL_DATABASE=testdb \
   -p 13306:3306 mysql:8.0
-MYSQLTEST_HOST=127.0.0.1 MYSQLTEST_PORT=13306 go test -run Live -v ./
+MYSQLTEST_HOST=127.0.0.1 MYSQLTEST_PORT=13306 go test -tags server -run Live -v .
 ```
 
-The live tests cover diagnose, latency, traceroute, the full speed test (including
-that it leaves no table behind) and the bad-password diagnosis path. They have been
-run against MySQL 8.0 and 5.7.
+The live tests exercise every tab against a real server, including that the speed
+test leaves no table behind. CI runs them against MySQL 5.7 and 8.0.
 
-## Notes
+## Releasing
 
-- The password is never written to disk; the rest of the connection form is kept
-  in `localStorage` between runs.
-- `go build` alone needs `frontend/dist` to exist (it is embedded). The Wails
-  tasks build the frontend first; a `.gitkeep` keeps a bare `go test` working.
+`version.txt` is the single source of truth. The script bumps it, commits, tags
+and pushes; the tag triggers the build and publishes the release.
 
-# Contributors
+```sh
+scripts/release.sh patch          # or minor / major / an exact 1.4.0
+scripts/release.sh 1.4.0 --force  # move a tag that already exists
+```
 
-- Sambo Chea <sombochea@cubis.tech>
+## Privacy
+
+This tool has no telemetry, no analytics, and no accounts. Nothing about you or
+your servers is collected or sent anywhere.
+
+- Credentials live in memory for the length of a run. The password is never
+  written to disk. The rest of the connection form is kept in the app's local
+  storage so you don't retype it.
+- Results stay on your machine until you copy them yourself. "Copy report"
+  puts JSON on your clipboard and nowhere else.
+- The app makes exactly three kinds of outbound connection: to the MySQL server
+  you typed in, ICMP probes to that host during a trace, and `api.github.com`
+  to check for a new release.
+- The speed test writes to the database you select. It creates one `conntest_*`
+  table and drops it when finished. Point it at a scratch database.
+
+## Credits
+
+Built by [Sambo Chea](https://github.com/sombochea).
+
+Copyright © 2026 [Cubis](https://cubis.tech).
