@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="utf-8"?>
+<MsixPackagingToolTemplate
+    xmlns="http://schemas.microsoft.com/msix/packaging/msixpackagingtool/template/2022">
+    <Settings
+        AllowTelemetry="false"
+        ApplyACLsToPackageFiles="true"
+        GenerateCommandLineFile="true"
+        AllowPromptForPassword="false">
+    </Settings>
+    <Installer
+        Path="mysqltester"
+        Arguments=""
+        InstallLocation="C:\Program Files\Cubisoft\MySQL Tester">
+    </Installer>
+    <PackageInformation
+        PackageName="MySQL Tester"
+        PackageDisplayName="MySQL Tester"
+        PublisherName="CN=Cubisoft"
+        PublisherDisplayName="Cubisoft"
+        Version="0.1.0.0"
+        PackageDescription="MySQL connection diagnostics, latency and throughput testing">
+        <Capabilities>
+            <Capability Name="runFullTrust" />
+            
+        </Capabilities>
+        <Applications>
+            <Application
+                Id="com.cubisoft.mysqltester"
+                Description="MySQL connection diagnostics, latency and throughput testing"
+                DisplayName="MySQL Tester"
+                ExecutableName="mysqltester"
+                EntryPoint="Windows.FullTrustApplication">
+                
+            </Application>
+        </Applications>
+        <Resources>
+            <Resource Language="en-us" />
+        </Resources>
+        <Dependencies>
+            <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.17763.0" MaxVersionTested="10.0.19041.0" />
+        </Dependencies>
+        <Properties>
+            <Framework>false</Framework>
+            <DisplayName>MySQL Tester</DisplayName>
+            <PublisherDisplayName>Cubisoft</PublisherDisplayName>
+            <Description>MySQL connection diagnostics, latency and throughput testing</Description>
+            <Logo>Assets\AppIcon.png</Logo>
+        </Properties>
+    </PackageInformation>
+    <SaveLocation PackagePath="mysqltester.msix" />
+    <PackageIntegrity>
+        <CertificatePath></CertificatePath>
+    </PackageIntegrity>
+</MsixPackagingToolTemplate>

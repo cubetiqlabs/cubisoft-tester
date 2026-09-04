@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+    <link rel="icon" type="image/png" href="/wails.png"/>
+    <link rel="stylesheet" href="/style.css"/>
+    <title>MySQL Tester</title>
+</head>
+<body>
+<div class="app">
+
+    <aside class="sidebar">
+        <div class="drag-strip"></div>
+        <h1 class="logo">MySQL&nbsp;Tester<span class="logo-sub">connection diagnostics</span></h1>
+
+        <form class="conn" id="conn" autocomplete="off">
+            <label class="field span2">
+                <span>Host</span>
+                <input id="host" type="text" placeholder="127.0.0.1" required/>
+            </label>
+            <label class="field">
+                <span>Port</span>
+                <input id="port" type="number" min="1" max="65535" value="3306"/>
+            </label>
+            <label class="field">
+                <span>Timeout (s)</span>
+                <input id="timeout" type="number" min="1" max="300" value="10"/>
+            </label>
+            <label class="field span2">
+                <span>User</span>
+                <input id="user" type="text" placeholder="root"/>
+            </label>
+            <label class="field span2">
+                <span>Password <em>not saved to disk</em></span>
+                <input id="password" type="password"/>
+            </label>
+            <label class="field span2">
+                <span>Database</span>
+                <span class="with-button">
+                    <input id="database" type="text" list="db-list" placeholder="required for speed test"/>
+                    <button type="button" id="load-dbs" class="btn ghost small" title="List databases on the server">List</button>
+                </span>
+                <datalist id="db-list"></datalist>
+            </label>
+            <label class="field span2">
+                <span>TLS</span>
+                <select id="tls">
+                    <option value="false">Disabled</option>
+                    <option value="preferred">Preferred (use if offered)</option>
+                    <option value="skip-verify">Required, skip certificate check</option>
+                    <option value="true">Required, verify certificate</option>
+                </select>
+            </label>
+        </form>
+
+        <div class="status" id="status" data-state="idle">Not connected</div>
+    </aside>
+
+    <main class="main">
+        <div class="drag-strip"></div>
+
+        <nav class="tabs" id="tabs">
+            <button class="tab is-active" data-tab="diagnose">Diagnose</button>
+            <button class="tab" data-tab="latency">Latency</button>
+            <button class="tab" data-tab="trace">Trace route</button>
+            <button class="tab" data-tab="speed">Speed test</button>
+            <div class="tabs-actions">
+                <button class="btn ghost small" id="copy" title="Copy the last result as text">Copy report</button>
+                <button class="btn" id="run">Run</button>
+                <button class="btn danger" id="cancel" hidden>Cancel</button>
+            </div>
+        </nav>
+
+        <div class="progress" id="progress" hidden>
+            <div class="progress-bar"><i id="progress-fill"></i></div>
+            <span id="progress-text"></span>
+        </div>
+
+        <section class="panel is-active" id="panel-diagnose" data-panel="diagnose">
+            <p class="opts-note">Walks the connection one layer at a time — DNS, TCP, handshake, auth, privileges, write access — and reports where it breaks.</p>
+            <div class="output" id="out-diagnose"><p class="empty">Fill in the connection on the left and press Run.</p></div>
+        </section>
+
+        <section class="panel" id="panel-latency" data-panel="latency">
+            <div class="opts">
+                <label>Probes <input id="lat-count" type="number" min="1" max="1000" value="20"/></label>
+                <label>Interval (ms) <input id="lat-interval" type="number" min="0" max="5000" value="100"/></label>
+                <label>Cold connects <input id="lat-cold" type="number" min="0" max="200" value="5"/></label>
+            </div>
+            <div class="output" id="out-latency"><p class="empty">Measures TCP round trip, query round trip, and the cost of opening a fresh connection.</p></div>
+        </section>
+
+        <section class="panel" id="panel-trace" data-panel="trace">
+            <div class="opts">
+                <label>Max hops <input id="tr-hops" type="number" min="1" max="64" value="30"/></label>
+                <label>Probes/hop <input id="tr-probes" type="number" min="1" max="10" value="3"/></label>
+                <label>Timeout (ms) <input id="tr-timeout" type="number" min="100" max="10000" value="1000"/></label>
+                <label class="check"><input id="tr-names" type="checkbox" checked/> Resolve names</label>
+            </div>
+            <div class="output" id="out-trace"><p class="empty">Traces the network path to the database host, then confirms the last mile by opening the MySQL port.</p></div>
+        </section>
+
+        <section class="panel" id="panel-speed" data-panel="speed">
+            <div class="opts">
+                <label>Rows <input id="sp-rows" type="number" min="1" max="1000000" value="5000"/></label>
+                <label>Payload (bytes) <input id="sp-payload" type="number" min="1" max="1048576" value="256"/></label>
+                <label>Batch size <input id="sp-batch" type="number" min="1" max="10000" value="200"/></label>
+                <label>Transactions <input id="sp-tx" type="number" min="0" max="100000" value="100"/></label>
+                <label>Connections <input id="sp-conc" type="number" min="1" max="32" value="1"/></label>
+                <label class="check"><input id="sp-keep" type="checkbox"/> Keep table</label>
+            </div>
+            <p class="opts-note warn">Creates a temporary table in the selected database, writes and reads real rows, then drops it.</p>
+            <div class="output" id="out-speed"><p class="empty">Pick a database on the left, then Run.</p></div>
+        </section>
+    </main>
+</div>
+
+<script type="module" src="/src/main.js"></script>
+</body>
+</html>
