@@ -46,14 +46,14 @@
         <key>NSAllowsLocalNetworking</key>
         <true/>
     </dict>
-    
-    
+
+
     <key>NSHumanReadableCopyright</key>
-    <string>© 2026, My Company</string>
-    
-    
+    <string>© 2026, Cubis</string>
+
+
     <key>CFBundleGetInfoString</key>
     <string>This is a comment</string>
-    
+
 </dict>
 </plist>

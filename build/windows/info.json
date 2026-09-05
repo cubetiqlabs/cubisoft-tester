@@ -5,11 +5,11 @@
 	"info": {
 		"0000": {
 			"ProductVersion": "0.1.0",
-			"CompanyName": "Cubisoft",
+			"CompanyName": "Cubis",
 			"FileDescription": "MySQL connection diagnostics, latency and throughput testing",
-			"LegalCopyright": "© 2026, My Company",
+			"LegalCopyright": "© 2026, Cubis",
 			"ProductName": "MySQL Tester",
-			"Comments": "This is a comment"
+			"Comments": "Cubisoft Tester Toolbox"
 		}
 	}
 }
