@@ -12,6 +12,8 @@ import type * as main$0 from "../../../../sombochea/cubisoft-tester/models.js";
 declare module "@wailsio/runtime" {
     namespace Events {
         interface CustomEvents {
+            "files-dropped": string;
+            "menu": string;
             "progress": main$0.Progress;
         }
     }

@@ -1,11 +1,12 @@
 import { Events, Updater } from "@wailsio/runtime";
 import { Tester } from "../bindings/github.com/sombochea/cubisoft-tester";
 import type {
-    Config, DiagnoseResult, Hop, LatencyResult, Phase, Progress,
-    Series, ServerInfo, SpeedResult, Step, TraceResult,
+    BackupResult, Config, DiagnoseResult, Hop, LatencyResult, Phase, Profile,
+    Progress, RestoreResult, Series, ServerInfo, SpeedResult, Step, TableInfo,
+    Toolbox, TraceResult,
 } from "../bindings/github.com/sombochea/cubisoft-tester";
 
-type Tab = "diagnose" | "latency" | "trace" | "speed";
+type Tab = "diagnose" | "latency" | "trace" | "speed" | "backup";
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const val = (id: string) => $<HTMLInputElement>(id).value.trim();
@@ -18,6 +19,9 @@ const escapeMap: Record<string, string> = { "&": "&amp;", "<": "&lt;", ">": "&gt
 const esc = (s: unknown) => String(s ?? "").replace(/[&<>"']/g, (c) => escapeMap[c]);
 
 const ms = (n: number) => `${n.toFixed(n < 10 ? 2 : 1)} ms`;
+// The bridge prefixes every Go error with "RuntimeError:", which means nothing
+// to the person reading it.
+const errText = (e: unknown) => String(e).replace(/^\w*Error:\s*/, "");
 // Go marshals a nil slice as null, and the generated bindings type it that way.
 const list = <T,>(v: T[] | null | undefined): T[] => v ?? [];
 const int = (n: number) => Math.round(n).toLocaleString();
@@ -88,8 +92,10 @@ function setRunning(on: boolean) {
     if (!on) setProgress("", 0);
 }
 
+// A negative pct means "no total to measure against" — streaming a dump, say —
+// so the bar is left alone and only the label moves.
 function setProgress(text: string, pct: number) {
-    $("progress-fill").style.width = `${Math.max(0, Math.min(100, pct))}%`;
+    if (pct >= 0) $("progress-fill").style.width = `${Math.min(100, pct)}%`;
     $("progress-text").textContent = text;
 }
 
@@ -115,7 +121,7 @@ $("load-dbs").addEventListener("click", async () => {
         $("db-list").innerHTML = list(dbs).map((d) => `<option value="${esc(d)}"></option>`).join("");
         setStatus(`${list(dbs).length} database(s) available. Click the Database field to pick one.`, "ok");
     } catch (err) {
-        setStatus(String(err), "bad");
+        setStatus(errText(err), "bad");
     }
 });
 
@@ -157,6 +163,11 @@ async function run() {
                 setStatus(r.portOpen ? `MySQL port reachable in ${ms(r.portMs)}` : `Port unreachable: ${r.portError}`, r.portOpen ? "ok" : "bad");
                 break;
             }
+            case "backup": {
+                out.innerHTML = renderTables(await Tester.ListTables(config()));
+                setStatus("Listed tables.", "ok");
+                break;
+            }
             case "speed": {
                 const r = await Tester.SpeedTest({
                     config: config(), rows: num("sp-rows"), payloadBytes: num("sp-payload"),
@@ -170,8 +181,8 @@ async function run() {
             }
         }
     } catch (err) {
-        out.innerHTML = `<div class="verdict bad">${esc(err)}</div>`;
-        setStatus(String(err), "bad");
+        out.innerHTML = `<div class="verdict bad">${esc(errText(err))}</div>`;
+        setStatus(errText(err), "bad");
     } finally {
         setRunning(false);
     }
@@ -366,6 +377,351 @@ function phaseRow(p: Phase) {
     </tr>`;
 }
 
+/* ---------- small modal ---------- */
+
+const askDialog = $<HTMLDialogElement>("ask");
+
+type AskField = { label: string; type?: string; value?: string };
+type AskCheck = { label: string; checked?: boolean };
+type AskResult = { value: string; checked: boolean };
+
+// Native <dialog>, so there is no dependency and no focus trap to maintain.
+// window.prompt is unavailable in the webview, which is why this exists.
+function ask(title: string, body: string, field?: AskField, check?: AskCheck): Promise<AskResult | null> {
+    $("ask-title").textContent = title;
+    $("ask-body").textContent = body;
+
+    const input = $<HTMLInputElement>("ask-input");
+    $("ask-field").hidden = !field;
+    if (field) {
+        $("ask-label").textContent = field.label;
+        input.type = field.type ?? "text";
+        input.value = field.value ?? "";
+    }
+
+    const box = $<HTMLInputElement>("ask-checkbox");
+    $("ask-check").hidden = !check;
+    if (check) {
+        $("ask-check-label").textContent = check.label;
+        box.checked = check.checked ?? false;
+    }
+
+    return new Promise((resolve) => {
+        askDialog.addEventListener("close", () => {
+            resolve(askDialog.returnValue === "ok" ? { value: input.value, checked: box.checked } : null);
+        }, { once: true });
+        askDialog.showModal();
+        if (field) input.select();
+    });
+}
+
+/* ---------- profiles ---------- */
+
+const profileList = $<HTMLSelectElement>("profile-list");
+let profiles: Profile[] = [];
+let profilesEncrypted = false;
+let profilesLocked = false;
+let selectedProfile = "";
+
+function applyProfile(p: Profile) {
+    const c = p.config;
+    $<HTMLInputElement>("host").value = c.host;
+    $<HTMLInputElement>("port").value = String(c.port || 3306);
+    $<HTMLInputElement>("user").value = c.user;
+    $<HTMLInputElement>("database").value = c.database;
+    $<HTMLSelectElement>("tls").value = c.tls || "false";
+    $<HTMLInputElement>("timeout").value = String(c.connectTimeoutSec || 10);
+    $<HTMLInputElement>("password").value = c.password;
+    saveForm();
+}
+
+function option(value: string, label: string) {
+    return `<option value="${esc(value)}">${esc(label)}</option>`;
+}
+
+// Action entries live in the same picker as the profiles, so the sidebar needs
+// no buttons at all. They are marked with an attribute rather than a magic
+// value: a profile name can never forge one, and the HTML parser cannot mangle
+// it the way it rewrites control characters inside attribute values.
+function action(name: string, label: string) {
+    return `<option value="" data-action="${name}">${esc(label)}</option>`;
+}
+
+async function refreshProfiles(selected = "") {
+    const info = await Tester.ProfilesInfo();
+    profilesEncrypted = info.encrypted;
+    profilesLocked = info.encrypted && !info.unlocked;
+    profileList.title = info.path;
+
+    if (profilesLocked) {
+        profiles = [];
+        selectedProfile = "";
+        profileList.innerHTML = option("", "Profiles locked") + action("unlock", "Unlock…");
+        profileList.value = "";
+        return;
+    }
+
+    profiles = list(await Tester.ListProfiles());
+    selectedProfile = profiles.some((p) => p.name === selected) ? selected : "";
+
+    let html = option("", profiles.length ? "No profile" : "No saved profiles");
+    if (profiles.length) {
+        html += `<optgroup label="Profiles">${profiles.map((p) => option(p.name, p.name)).join("")}</optgroup>`;
+    }
+    html += `<optgroup label="Manage">` + action("save", "Save current connection…");
+    if (selectedProfile) html += action("delete", `Delete “${selectedProfile}”…`);
+    if (profilesEncrypted) html += action("key", "Change secret key…");
+    html += `</optgroup>`;
+
+    profileList.innerHTML = html;
+    profileList.value = selectedProfile;
+}
+
+profileList.addEventListener("change", () => {
+    const chosen = profileList.selectedOptions[0]?.dataset.action;
+    if (!chosen) {
+        selectedProfile = profileList.value;
+        const p = profiles.find((x) => x.name === selectedProfile);
+        if (p) applyProfile(p);
+        void refreshProfiles(selectedProfile); // the Delete entry follows the selection
+        return;
+    }
+    profileList.value = selectedProfile; // running an action is not a selection
+    switch (chosen) {
+        case "save": void saveProfileAction(); break;
+        case "delete": void deleteProfileAction(); break;
+        case "key": void changeKeyAction(); break;
+        case "unlock": void unlockAction(); break;
+    }
+});
+
+async function saveProfileAction() {
+    const r = await ask("Save profile", "Stored on this machine only.",
+        { label: "Name", value: selectedProfile || val("host") },
+        { label: "Save the password too", checked: profilesEncrypted });
+    if (!r || !r.value.trim()) return;
+
+    try {
+        // A password can only be kept in an encrypted file, so ask for the key
+        // now rather than letting the save fail.
+        if (r.checked && !profilesEncrypted) {
+            const key = await ask("Set a secret key",
+                "Passwords are only saved into an encrypted profile file. Choose a key — it cannot be recovered.",
+                { label: "Secret key", type: "password" });
+            if (!key || !key.value) return;
+            await Tester.SetProfilesSecret(key.value);
+            profilesEncrypted = true;
+        }
+        await Tester.SaveProfile({ name: r.value.trim(), config: config(), savePassword: r.checked });
+        await refreshProfiles(r.value.trim());
+        setStatus(`Saved profile “${r.value.trim()}”.`, "ok");
+    } catch (err) {
+        setStatus(errText(err), "bad");
+    }
+}
+
+async function deleteProfileAction() {
+    if (!selectedProfile) return;
+    const name = selectedProfile;
+    if (!(await ask("Delete profile", `Delete “${name}”?`))) return;
+    try {
+        await Tester.DeleteProfile(name);
+        await refreshProfiles();
+        setStatus(`Deleted profile “${name}”.`, "ok");
+    } catch (err) {
+        setStatus(errText(err), "bad");
+    }
+}
+
+async function changeKeyAction() {
+    const r = await ask("Secret key",
+        "Enter a new key, or leave it blank to remove encryption — which also clears every stored password.",
+        { label: "Secret key", type: "password" });
+    if (!r) return;
+    try {
+        await Tester.SetProfilesSecret(r.value);
+        await refreshProfiles(selectedProfile);
+        setStatus(r.value ? "Secret key changed." : "Encryption removed; stored passwords cleared.", "ok");
+    } catch (err) {
+        setStatus(errText(err), "bad");
+    }
+}
+
+async function unlockAction() {
+    const r = await ask("Unlock profiles", "The profile file on this machine is encrypted.",
+        { label: "Secret key", type: "password" });
+    if (!r) return;
+    try {
+        await Tester.UnlockProfiles(r.value);
+        await refreshProfiles();
+        setStatus("Profiles unlocked for this session.", "ok");
+    } catch (err) {
+        setStatus(errText(err), "bad");
+    }
+}
+
+async function exportProfilesAction() {
+    try {
+        const path = await Tester.ExportProfiles();
+        setStatus(path ? `Exported to ${path}` : "Export cancelled.", path ? "ok" : "idle");
+    } catch (err) {
+        setStatus(errText(err), "bad");
+    }
+}
+
+// importFrom drives both the File menu (which picks a file first) and a dropped
+// file (path already known). The key is asked for only when the file has one.
+async function importFrom(path: string) {
+    try {
+        if (!path) {
+            path = await Tester.PickProfileFile();
+            if (!path) return;
+        }
+        let secret = "";
+        if (await Tester.ImportEncrypted(path)) {
+            const r = await ask("Import profiles", "This file is encrypted. Enter the key it was exported with.",
+                { label: "Secret key", type: "password" });
+            if (!r) return;
+            secret = r.value;
+        }
+        const names = list(await Tester.ImportProfiles(path, secret, false));
+        // Land on what was just imported rather than making the user hunt for it.
+        await refreshProfiles(names[0] ?? selectedProfile);
+        const landed = profiles.find((p) => p.name === names[0]);
+        if (landed) applyProfile(landed);
+        setStatus(names.length ? `Imported ${names.length} profile(s).` : "Nothing to import.", "ok");
+    } catch (err) {
+        setStatus(errText(err), "bad");
+    }
+}
+
+Events.On("files-dropped", (e: { data: string }) => void importFrom(e.data));
+
+// The File menu emits actions rather than acting itself, so a menu item and the
+// picker run the same handler, prompts and all.
+Events.On("menu", (e: { data: string }) => {
+    if (e.data === "profiles.export") void exportProfilesAction();
+    if (e.data === "profiles.import") void importFrom("");
+    if (e.data === "app.update") void checkUpdates();
+});
+
+/* ---------- backup ---------- */
+
+function backupOptions() {
+    return {
+        config: config(),
+        tables: val("bk-tables").split(/[\s,]+/).filter(Boolean),
+        schemaOnly: checked("bk-schema"),
+        dataOnly: checked("bk-data"),
+        addDropTable: checked("bk-drop"),
+        routines: checked("bk-routines"),
+        triggers: checked("bk-triggers"),
+        events: checked("bk-events"),
+        singleTransaction: checked("bk-tx"),
+        compress: checked("bk-gzip"),
+        path: "", // blank means "ask me where to save"
+    };
+}
+
+function renderTables(tables: TableInfo[] | null) {
+    const rows = list(tables);
+    if (!rows.length) return `<p class="empty">No tables in this database.</p>`;
+    const total = rows.reduce((n, t) => n + t.dataBytes + t.indexBytes, 0);
+    const noPk = rows.filter((t) => !t.hasPk).map((t) => t.name);
+    const notInnoDB = rows.filter((t) => t.engine && t.engine.toLowerCase() !== "innodb");
+
+    const notes: string[] = [];
+    if (noPk.length) notes.push(`${noPk.length} table(s) have no primary key (${noPk.slice(0, 5).join(", ")}${noPk.length > 5 ? "…" : ""}). Replication and InnoDB both suffer for it.`);
+    if (notInnoDB.length) notes.push(`${notInnoDB.length} table(s) are not InnoDB, so they are not covered by a single-transaction backup and will be locked while it runs.`);
+
+    const table = card(`Tables — ${rows.length}, ${bytes(total)} total`, `<div class="scroll-x"><table>
+        <thead><tr><th>Table</th><th>Engine</th><th class="num">rows</th><th class="num">data</th><th class="num">index</th><th>collation</th><th>PK</th></tr></thead>
+        <tbody>${rows.map((t) => `<tr class="${t.hasPk ? "" : "bad"}">
+            <td class="mono">${esc(t.name)}</td>
+            <td class="dim">${esc(t.engine)}</td>
+            <td class="num">${int(t.rows)}</td>
+            <td class="num">${bytes(t.dataBytes)}</td>
+            <td class="num">${bytes(t.indexBytes)}</td>
+            <td class="dim">${esc(t.collation)}</td>
+            <td>${t.hasPk ? "●" : "✕"}</td>
+        </tr>`).join("")}</tbody></table></div>`, true);
+
+    return table + noteList("Notes", notes);
+}
+
+const bytes = (n: number) => {
+    if (n < 1024) return `${n} B`;
+    const units = ["KiB", "MiB", "GiB", "TiB"];
+    let v = n / 1024, i = 0;
+    while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+    return `${v.toFixed(1)} ${units[i]}`;
+};
+
+async function refreshToolbox() {
+    const box: Toolbox = await Tester.Toolbox();
+    const line = (t: { name: string; found: boolean; version: string }) =>
+        t.found ? `${t.name} ${t.version.replace(/^.*Ver /, "").split(" ")[0]}` : `${t.name} not found`;
+    const el = $("bk-tools");
+    el.textContent = `${line(box.dump)} · ${line(box.client)}${box.hint ? ` — ${box.hint}` : ""}`;
+    el.className = box.dump.found && box.client.found ? "opts-note" : "opts-note warn";
+    $<HTMLButtonElement>("bk-dump").disabled = !box.dump.found;
+    $<HTMLButtonElement>("bk-restore").disabled = !box.client.found;
+}
+
+$("bk-list").addEventListener("click", () => void run());
+
+$("bk-dump").addEventListener("click", async () => {
+    if (running) return;
+    setRunning(true);
+    setStatus("Dumping…", "busy");
+    try {
+        const r: BackupResult = await Tester.Backup(backupOptions());
+        if (!r.path) {
+            setStatus("Backup cancelled.", "idle");
+        } else {
+            lastResult = r;
+            $("out-backup").innerHTML = `<div class="verdict ok">Wrote ${bytes(r.bytes)} to ${esc(r.path)} in ${ms(r.durationMs)}.</div>`
+                + card("Command", `<div class="mono dim">${esc(r.command)}</div>`)
+                + (r.stderr ? card("mysqldump output", `<div class="mono dim">${esc(r.stderr)}</div>`) : "");
+            setStatus(`Backup written: ${r.path}`, "ok");
+        }
+    } catch (err) {
+        $("out-backup").innerHTML = `<div class="verdict bad">${esc(errText(err))}</div>`;
+        setStatus(errText(err), "bad");
+    } finally {
+        setRunning(false);
+    }
+});
+
+$("bk-restore").addEventListener("click", async () => {
+    if (running) return;
+    const db = val("database");
+    if (!db) { setStatus("Select the database to restore into.", "bad"); return; }
+    const go = await ask("Restore", `This runs the dump against “${db}” and overwrites whatever it touches. There is no undo.`,
+        { label: `Type the database name to confirm`, value: "" });
+    if (go === null) return;
+    if (go.value.trim() !== db) { setStatus("Database name did not match; restore cancelled.", "bad"); return; }
+
+    setRunning(true);
+    setStatus("Restoring…", "busy");
+    try {
+        const r: RestoreResult = await Tester.Restore({ config: config(), confirm: true, path: "" });
+        if (!r.path) {
+            setStatus("Restore cancelled.", "idle");
+        } else {
+            lastResult = r;
+            $("out-backup").innerHTML = `<div class="verdict ok">Restored ${bytes(r.bytes)} from ${esc(r.path)} in ${ms(r.durationMs)}.</div>`
+                + (r.stderr ? card("mysql output", `<div class="mono dim">${esc(r.stderr)}</div>`) : "");
+            setStatus("Restore finished.", "ok");
+        }
+    } catch (err) {
+        $("out-backup").innerHTML = `<div class="verdict bad">${esc(errText(err))}</div>`;
+        setStatus(errText(err), "bad");
+    } finally {
+        setRunning(false);
+    }
+});
+
 /* ---------- updates ---------- */
 
 const updateBtn = $<HTMLButtonElement>("update");
@@ -382,7 +738,7 @@ const checkUpdates = async () => {
     try {
         await Tester.CheckForUpdates();
     } catch (err) {
-        setStatus(String(err), "bad");
+        setStatus(errText(err), "bad");
     }
 };
 updateBtn.addEventListener("click", () => void checkUpdates());
@@ -391,6 +747,8 @@ $("check-update").addEventListener("click", () => void checkUpdates());
 /* ---------- boot ---------- */
 
 loadForm();
+void refreshProfiles();
+void refreshToolbox();
 $("conn").addEventListener("change", saveForm);
 document.addEventListener("keydown", (e) => {
     if ((e.metaKey || e.ctrlKey) && e.key === "Enter") void run();

@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!-- Single-colour glyph for Icon Composer, which supplies the fill per
+       appearance: one path, holes cut with evenodd. The crescent under the top
+       edge reads as the disc rim; the straight slit stands in for the trace. -->
+  <path fill-rule="evenodd" d="
+    M307 296 v372 a205 64 0 0 0 410 0 v-372 a205 64 0 0 0 -410 0 z
+    M307 296 a205 64 0 0 0 410 0 a205 26 0 0 1 -410 0 z
+    M307 484 h410 v56 h-410 z
+  "/>
+</svg>

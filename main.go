@@ -10,6 +10,7 @@ import (
 
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/wailsapp/wails/v3/pkg/application"
+	"github.com/wailsapp/wails/v3/pkg/events"
 	"github.com/wailsapp/wails/v3/pkg/updater"
 	"github.com/wailsapp/wails/v3/pkg/updater/providers/github"
 )
@@ -35,6 +36,8 @@ func isRelease(v string) bool {
 
 func init() {
 	application.RegisterEvent[Progress]("progress")
+	application.RegisterEvent[string]("menu")
+	application.RegisterEvent[string]("files-dropped")
 }
 
 func main() {
@@ -52,9 +55,10 @@ func main() {
 		},
 	})
 
+	setupMenu(app)
 	setupUpdater(app)
 
-	app.Window.NewWithOptions(application.WebviewWindowOptions{
+	window := app.Window.NewWithOptions(application.WebviewWindowOptions{
 		Title:     "MySQL Tester",
 		Width:     1180,
 		Height:    820,
@@ -66,6 +70,17 @@ func main() {
 		},
 		BackgroundColour: application.NewRGB(15, 17, 22),
 		URL:              "/",
+		// Lets an exported profile file be dropped straight onto the window.
+		EnableFileDrop: true,
+	})
+
+	window.OnWindowEvent(events.Common.WindowFilesDropped, func(e *application.WindowEvent) {
+		for _, path := range e.Context().DroppedFiles() {
+			if strings.HasSuffix(strings.ToLower(path), ".json") {
+				app.Event.Emit("files-dropped", path)
+				return
+			}
+		}
 	})
 
 	if err := app.Run(); err != nil {

@@ -7,19 +7,29 @@ export {
 };
 
 export type {
+    BackupOptions,
+    BackupResult,
     Config,
     DiagnoseResult,
     Hop,
     LatencyOptions,
     LatencyResult,
     Phase,
+    Profile,
+    ProfilesInfo,
     Progress,
+    RestoreOptions,
+    RestoreResult,
+    SaveProfileRequest,
     Series,
     ServerInfo,
     SpeedOptions,
     SpeedResult,
     Stats,
     Step,
+    TableInfo,
+    Tool,
+    Toolbox,
     TraceOptions,
     TraceResult
 } from "./models.js";

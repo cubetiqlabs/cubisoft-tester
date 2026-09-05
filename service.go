@@ -20,9 +20,10 @@ type Progress struct {
 // Tester is the single service bound to the frontend. Only one test runs at a
 // time: starting a new one cancels whatever was in flight.
 type Tester struct {
-	mu     sync.Mutex
-	cancel context.CancelFunc
-	gen    uint64
+	mu       sync.Mutex
+	cancel   context.CancelFunc
+	gen      uint64
+	profiles profileStore
 }
 
 func (t *Tester) begin(budget time.Duration) (context.Context, func()) {

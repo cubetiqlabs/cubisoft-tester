@@ -16,6 +16,13 @@ import { Call as $Call, CancellablePromise as $CancellablePromise } from "@wails
 import * as $models from "./models.js";
 
 /**
+ * Backup shells out to mysqldump and streams its output to a file the user picks.
+ */
+export function Backup(opts: $models.BackupOptions): $CancellablePromise<$models.BackupResult> {
+    return $Call.ByID(2050586003, opts);
+}
+
+/**
  * Cancel stops the running test. Safe to call when nothing is running.
  */
 export function Cancel(): $CancellablePromise<void> {
@@ -31,11 +38,43 @@ export function CheckForUpdates(): $CancellablePromise<void> {
 }
 
 /**
+ * DeleteProfile removes one profile by name.
+ */
+export function DeleteProfile(name: string): $CancellablePromise<void> {
+    return $Call.ByID(2007282475, name);
+}
+
+/**
  * Diagnose walks the connection one layer at a time and stops at the first failure.
  * Named results so the deferred TotalMs assignment lands in what the caller gets.
  */
 export function Diagnose(cfg: $models.Config): $CancellablePromise<$models.DiagnoseResult> {
     return $Call.ByID(2747142849, cfg);
+}
+
+/**
+ * ExportProfiles copies the vault to a file the user picks, byte for byte:
+ * an encrypted vault stays encrypted, and only the same secret opens it.
+ */
+export function ExportProfiles(): $CancellablePromise<string> {
+    return $Call.ByID(967862481);
+}
+
+/**
+ * ImportEncrypted reports whether a file needs a key before it can be imported,
+ * so a dropped file only prompts when it has to.
+ */
+export function ImportEncrypted(path: string): $CancellablePromise<boolean> {
+    return $Call.ByID(2143172424, path);
+}
+
+/**
+ * ImportProfiles merges a vault file into the current one and returns the names
+ * it brought in. fileSecret is the key the file was encrypted with, blank when
+ * it was plaintext.
+ */
+export function ImportProfiles(path: string, fileSecret: string, replace: boolean): $CancellablePromise<string[] | null> {
+    return $Call.ByID(908762170, path, fileSecret, replace);
 }
 
 /**
@@ -55,6 +94,60 @@ export function ListDatabases(cfg: $models.Config): $CancellablePromise<string[]
 }
 
 /**
+ * ListProfiles returns the saved connections, newest edit first by name order.
+ */
+export function ListProfiles(): $CancellablePromise<$models.Profile[] | null> {
+    return $Call.ByID(4229842479);
+}
+
+/**
+ * ListTables shows what is in the database and how big it is, largest first —
+ * both to size a backup and to spot the tables that will hurt.
+ */
+export function ListTables(cfg: $models.Config): $CancellablePromise<$models.TableInfo[] | null> {
+    return $Call.ByID(2688371244, cfg);
+}
+
+/**
+ * PickProfileFile opens the file dialog and returns the chosen path, or "" if
+ * the user cancelled. Choosing the file first lets the caller ask whether it
+ * needs a key before deciding to prompt for one.
+ */
+export function PickProfileFile(): $CancellablePromise<string> {
+    return $Call.ByID(440501031);
+}
+
+/**
+ * ProfilesInfo tells the UI whether it needs to ask for a secret key.
+ */
+export function ProfilesInfo(): $CancellablePromise<$models.ProfilesInfo> {
+    return $Call.ByID(3435565079);
+}
+
+/**
+ * Restore pipes a dump file into the mysql client. It overwrites whatever the
+ * dump touches, so the UI has to pass Confirm.
+ */
+export function Restore(opts: $models.RestoreOptions): $CancellablePromise<$models.RestoreResult> {
+    return $Call.ByID(2861544005, opts);
+}
+
+/**
+ * SaveProfile adds or replaces a profile by name.
+ */
+export function SaveProfile(req: $models.SaveProfileRequest): $CancellablePromise<void> {
+    return $Call.ByID(3782387825, req);
+}
+
+/**
+ * SetProfilesSecret re-encrypts the vault under a new secret. An empty secret
+ * removes encryption, which also drops every stored password.
+ */
+export function SetProfilesSecret(newSecret: string): $CancellablePromise<void> {
+    return $Call.ByID(2534697061, newSecret);
+}
+
+/**
  * SpeedTest inserts, reads, updates, commits and deletes real rows in a
  * throwaway table, so the numbers reflect the whole client-server path rather
  * than a synthetic ping.
@@ -65,12 +158,26 @@ export function SpeedTest(opts: $models.SpeedOptions): $CancellablePromise<$mode
 }
 
 /**
+ * Toolbox tells the UI up front whether backup and restore are available.
+ */
+export function Toolbox(): $CancellablePromise<$models.Toolbox> {
+    return $Call.ByID(129025204);
+}
+
+/**
  * Trace walks the path to the database host with TTL-limited ICMP echoes, then
  * confirms the last mile by opening a real TCP connection to the MySQL port.
  * A hop showing * is a router that declines to answer, not necessarily a fault.
  */
 export function Trace(opts: $models.TraceOptions): $CancellablePromise<$models.TraceResult> {
     return $Call.ByID(853838722, opts);
+}
+
+/**
+ * UnlockProfiles caches the secret for this session after proving it decrypts.
+ */
+export function UnlockProfiles(secret: string): $CancellablePromise<void> {
+    return $Call.ByID(1550844867, secret);
 }
 
 /**

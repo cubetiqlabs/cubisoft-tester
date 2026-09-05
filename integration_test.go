@@ -1,10 +1,13 @@
 package main
 
 import (
+	"context"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 // testConfig reads a live server from the environment. Set MYSQLTEST_HOST to
@@ -185,4 +188,115 @@ func contains(list []string, want string) bool {
 		}
 	}
 	return false
+}
+
+func TestLiveListTables(t *testing.T) {
+	cfg := testConfig(t)
+	tester := &Tester{}
+	seedTable(t, cfg, "conntest_inventory")
+
+	tables, err := tester.ListTables(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found *TableInfo
+	for i := range tables {
+		if tables[i].Name == "conntest_inventory" {
+			found = &tables[i]
+		}
+	}
+	if found == nil {
+		t.Fatalf("seeded table missing from %d listed tables", len(tables))
+	}
+	if !found.HasPK {
+		t.Error("primary key not detected")
+	}
+	if !strings.EqualFold(found.Engine, "InnoDB") {
+		t.Errorf("engine = %s", found.Engine)
+	}
+	t.Logf("%s: engine=%s rows=%d data=%d", found.Name, found.Engine, found.Rows, found.DataBytes)
+}
+
+// TestLiveBackupRestore is the round trip that matters: dump, destroy, restore,
+// and check the rows came back.
+func TestLiveBackupRestore(t *testing.T) {
+	cfg := testConfig(t)
+	tester := &Tester{}
+	if box := tester.Toolbox(); !box.Dump.Found || !box.Client.Found {
+		t.Skipf("mysqldump/mysql not installed: %s", box.Hint)
+	}
+	seedTable(t, cfg, "conntest_backup")
+	dump := filepath.Join(t.TempDir(), "dump.sql.gz")
+
+	res, err := tester.Backup(BackupOptions{
+		Config: cfg, Tables: []string{"conntest_backup"},
+		AddDropTable: true, SingleTransaction: true, Compress: true, Path: dump,
+	})
+	if err != nil {
+		t.Fatalf("backup: %v (stderr %s)", err, res.Stderr)
+	}
+	if res.Bytes == 0 {
+		t.Fatal("dump is empty")
+	}
+	// The password must never reach the reported command line.
+	if strings.Contains(res.Command, cfg.Password) {
+		t.Fatalf("password leaked into the command: %s", res.Command)
+	}
+	t.Logf("dumped %d bytes in %.0fms", res.Bytes, res.DurationMs)
+
+	mustExec(t, cfg, "DROP TABLE conntest_backup")
+
+	rr, err := tester.Restore(RestoreOptions{Config: cfg, Confirm: true, Path: dump})
+	if err != nil {
+		t.Fatalf("restore: %v (stderr %s)", err, rr.Stderr)
+	}
+	if n := countRows(t, cfg, "conntest_backup"); n != 3 {
+		t.Fatalf("restored %d rows, want 3", n)
+	}
+	mustExec(t, cfg, "DROP TABLE IF EXISTS conntest_backup")
+
+	// Restoring without the confirmation flag must be refused outright.
+	if _, err := tester.Restore(RestoreOptions{Config: cfg, Path: dump}); err == nil {
+		t.Fatal("restore ran without confirmation")
+	}
+}
+
+func seedTable(t *testing.T, cfg Config, name string) {
+	t.Helper()
+	mustExec(t, cfg, "DROP TABLE IF EXISTS "+name)
+	mustExec(t, cfg, "CREATE TABLE "+name+" (id INT NOT NULL AUTO_INCREMENT PRIMARY KEY, label VARCHAR(64) NOT NULL) ENGINE=InnoDB")
+	mustExec(t, cfg, "INSERT INTO "+name+" (label) VALUES ('one'),('two'),('three')")
+	t.Cleanup(func() { mustExec(t, cfg, "DROP TABLE IF EXISTS "+name) })
+}
+
+// Deliberately not t.Context(): it is cancelled before t.Cleanup runs, and
+// these helpers are used from cleanup to drop the seeded tables.
+func mustExec(t *testing.T, cfg Config, query string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	db, err := cfg.open(ctx, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.ExecContext(ctx, query); err != nil {
+		t.Fatalf("%s: %v", query, err)
+	}
+}
+
+func countRows(t *testing.T, cfg Config, table string) int {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	db, err := cfg.open(ctx, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var n int
+	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM "+table).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
 }

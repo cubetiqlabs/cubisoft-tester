@@ -3,16 +3,18 @@
 <head>
     <meta charset="UTF-8"/>
     <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-    <link rel="icon" type="image/png" href="/wails.png"/>
+    <link rel="icon" type="image/svg+xml" href="/icon.svg"/>
     <link rel="stylesheet" href="/style.css"/>
     <title>MySQL Tester</title>
 </head>
 <body>
-<div class="app">
+<div class="app" data-file-drop-target>
 
     <aside class="sidebar">
         <div class="drag-strip"></div>
         <h1 class="logo">MySQL&nbsp;Tester<span class="logo-sub">connection diagnostics</span></h1>
+
+        <select id="profile-list" class="profiles" aria-label="Saved connection profiles"></select>
 
         <form class="conn" id="conn" autocomplete="off">
             <label class="field span2">
@@ -32,7 +34,7 @@
                 <input id="user" type="text" placeholder="root"/>
             </label>
             <label class="field span2">
-                <span>Password <em>not saved to disk</em></span>
+                <span>Password</span>
                 <input id="password" type="password"/>
             </label>
             <label class="field span2">
@@ -71,6 +73,7 @@
             <button class="tab" data-tab="latency">Latency</button>
             <button class="tab" data-tab="trace">Trace route</button>
             <button class="tab" data-tab="speed">Speed test</button>
+            <button class="tab" data-tab="backup">Backup</button>
             <div class="tabs-actions">
                 <button class="btn ghost small" id="copy" title="Copy the last result as text">Copy report</button>
                 <button class="btn" id="run">Run</button>
@@ -119,8 +122,41 @@
             <p class="opts-note warn">Creates a temporary table in the selected database, writes and reads real rows, then drops it.</p>
             <div class="output" id="out-speed"><p class="empty">Pick a database on the left, then Run.</p></div>
         </section>
+        <section class="panel" id="panel-backup" data-panel="backup">
+            <div class="opts">
+                <label class="check"><input id="bk-schema" type="checkbox"/> Schema only</label>
+                <label class="check"><input id="bk-data" type="checkbox"/> Data only</label>
+                <label class="check"><input id="bk-drop" type="checkbox" checked/> DROP TABLE</label>
+                <label class="check"><input id="bk-routines" type="checkbox" checked/> Routines</label>
+                <label class="check"><input id="bk-triggers" type="checkbox" checked/> Triggers</label>
+                <label class="check"><input id="bk-events" type="checkbox"/> Events</label>
+                <label class="check"><input id="bk-tx" type="checkbox" checked/> Single transaction</label>
+                <label class="check"><input id="bk-gzip" type="checkbox" checked/> gzip</label>
+                <label>Tables <input id="bk-tables" type="text" placeholder="all" style="width:150px"/></label>
+            </div>
+            <div class="opts">
+                <button type="button" id="bk-list" class="btn ghost small">List tables</button>
+                <button type="button" id="bk-dump" class="btn small">Back up…</button>
+                <button type="button" id="bk-restore" class="btn danger small">Restore…</button>
+            </div>
+            <p class="opts-note" id="bk-tools">Checking for mysqldump…</p>
+            <div class="output" id="out-backup"><p class="empty">Backup and restore run the mysqldump and mysql client tools installed on this machine.</p></div>
+        </section>
     </main>
 </div>
+
+<dialog id="ask">
+    <form method="dialog" id="ask-form">
+        <h3 id="ask-title"></h3>
+        <p id="ask-body"></p>
+        <label id="ask-field"><span id="ask-label"></span><input id="ask-input" type="text"/></label>
+        <label id="ask-check" class="check"><input id="ask-checkbox" type="checkbox"/> <span id="ask-check-label"></span></label>
+        <menu>
+            <button value="" class="btn ghost small">Cancel</button>
+            <button value="ok" id="ask-ok" class="btn small">OK</button>
+        </menu>
+    </form>
+</dialog>
 
 <script type="module" src="/src/main.js"></script>
 </body>

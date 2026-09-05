@@ -9,6 +9,13 @@ the problem. Targets MySQL 5.6 through 8.x. Built with Go and [Wails v3](https:/
 | **Latency** | How long is a round trip, how much does it vary, what does a new connection cost? |
 | **Trace route** | What path do packets take, and is the MySQL port reachable? |
 | **Speed test** | How fast can this client insert, read, update, commit and delete? |
+| **Backup** | What is in this database, how big is it, and can I dump and restore it? |
+
+Connections you use often can be saved as profiles from the picker in the
+sidebar. Tick "Save the password too" and the app asks for a secret key, then
+keeps the whole profile file encrypted. Export and import live in the **File**
+menu, and an exported file can also be dropped straight onto the window — you are
+asked for its key only if it has one.
 
 ## Install
 
@@ -71,8 +78,12 @@ docker run -d --rm -e MYSQL_ROOT_PASSWORD=testpw -e MYSQL_DATABASE=testdb \
 MYSQLTEST_HOST=127.0.0.1 MYSQLTEST_PORT=13306 go test -tags server -run Live -v .
 ```
 
-The live tests exercise every tab against a real server, including that the speed
-test leaves no table behind. CI runs them against MySQL 5.7 and 8.0.
+The live tests exercise every tab against a real server: that the speed test
+leaves no table behind, and that a backup can be dumped, the table dropped, and
+the rows restored. CI runs them against MySQL 5.7 and 8.0.
+
+Backup and restore need `mysqldump` and `mysql` on the machine (`brew install
+mysql-client`, `apt install mysql-client`); the app says so when they are missing.
 
 ## Releasing
 
@@ -89,14 +100,25 @@ scripts/release.sh 1.4.0 --force  # move a tag that already exists
 This tool has no telemetry, no analytics, and no accounts. Nothing about you or
 your servers is collected or sent anywhere.
 
-- Credentials live in memory for the length of a run. The password is never
-  written to disk. The rest of the connection form is kept in the app's local
-  storage so you don't retype it.
-- Results stay on your machine until you copy them yourself. "Copy report"
-  puts JSON on your clipboard and nowhere else.
 - The app makes exactly three kinds of outbound connection: to the MySQL server
   you typed in, ICMP probes to that host during a trace, and `api.github.com`
   to check for a new release.
+- Results stay on your machine until you copy them yourself. "Copy report"
+  puts JSON on your clipboard and nowhere else.
+- The connection form (never the password) is kept in the app's local storage
+  so you don't retype it.
+- Profiles live in one file: `profiles.json` under your OS config directory —
+  hover the profile picker for the exact path. Without a secret key it is plain
+  JSON, and passwords are refused rather than written to it. With one, the whole
+  list is encrypted with AES-256-GCM under a key derived by PBKDF2-SHA256
+  (600,000 iterations), and a password is kept only for profiles you asked to
+  keep it for. The key is held in memory for the session only, and there is no
+  recovery if you lose it.
+- Export writes that same file, byte for byte: an encrypted export stays
+  encrypted and needs the same key to import.
+- Backup and restore run the `mysqldump` and `mysql` binaries already on your
+  machine. Credentials are passed in a 0600 temp file, never on the command
+  line where every process listing would see them.
 - The speed test writes to the database you select. It creates one `conntest_*`
   table and drops it when finished. Point it at a scratch database.
 

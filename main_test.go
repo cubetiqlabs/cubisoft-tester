@@ -1,8 +1,13 @@
 package main
 
 import (
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"math"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -158,5 +163,322 @@ func TestWarningsFlagsTheDangerousDefaults(t *testing.T) {
 		MaxAllowedPacket: 64 << 20, SQLMode: "STRICT_TRANS_TABLES", TLSCipher: "TLS_AES_256_GCM_SHA384"}
 	if w := warnings(healthy, 20, 15); len(w) != 0 {
 		t.Fatalf("healthy server should produce no warnings, got %v", w)
+	}
+}
+
+/* ---------- profiles ---------- */
+
+// withTempConfigDir points os.UserConfigDir at a scratch directory so these
+// tests never touch the real profile file.
+func withTempConfigDir(t *testing.T) {
+	t.Helper()
+	dir := t.TempDir()
+	switch runtime.GOOS {
+	case "darwin":
+		t.Setenv("HOME", dir)
+	case "windows":
+		t.Setenv("AppData", dir)
+	default:
+		t.Setenv("XDG_CONFIG_HOME", dir)
+	}
+	path, err := profilesPath()
+	if err != nil || !strings.HasPrefix(path, dir) {
+		t.Fatalf("profilesPath %q is not inside the temp dir %q (err %v)", path, dir, err)
+	}
+}
+
+func sampleProfile(name string, savePassword bool) SaveProfileRequest {
+	return SaveProfileRequest{Name: name, SavePassword: savePassword, Config: Config{
+		Host: "db.example.com", Port: 3306, User: "app", Password: "s3cret", Database: "shop",
+	}}
+}
+
+func TestProfilesPlaintextDropsPassword(t *testing.T) {
+	withTempConfigDir(t)
+	tester := &Tester{}
+
+	// Asking to keep a password in a plaintext file must be refused outright,
+	// not silently honoured.
+	if err := tester.SaveProfile(sampleProfile("prod", true)); err == nil {
+		t.Fatal("saving a password into an unencrypted vault was allowed")
+	}
+	if err := tester.SaveProfile(sampleProfile("prod", false)); err != nil {
+		t.Fatal(err)
+	}
+	got, err := tester.ListProfiles()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Name != "prod" {
+		t.Fatalf("got %+v", got)
+	}
+	// An unencrypted vault is a plain file on disk, so it must not hold secrets.
+	if got[0].Config.Password != "" {
+		t.Fatal("password was written to an unencrypted profile file")
+	}
+	if got[0].UpdatedAt == "" {
+		t.Fatal("UpdatedAt not stamped")
+	}
+
+	path, _ := profilesPath()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "s3cret") {
+		t.Fatal("password found in the file on disk")
+	}
+}
+
+func TestProfilesEncryptionRoundTrip(t *testing.T) {
+	withTempConfigDir(t)
+	tester := &Tester{}
+
+	if err := tester.SetProfilesSecret("correct horse"); err != nil {
+		t.Fatal(err)
+	}
+	if err := tester.SaveProfile(sampleProfile("prod", true)); err != nil {
+		t.Fatal(err)
+	}
+	// Opting out still drops the password, even in an encrypted vault.
+	if err := tester.SaveProfile(sampleProfile("staging", false)); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := tester.ListProfiles()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("want 2 profiles, got %+v", got)
+	}
+	byName := map[string]Profile{}
+	for _, p := range got {
+		byName[p.Name] = p
+	}
+	if byName["prod"].Config.Password != "s3cret" {
+		t.Fatalf("password should survive in an encrypted vault: %+v", byName["prod"])
+	}
+	if byName["staging"].Config.Password != "" {
+		t.Fatal("password kept despite savePassword=false")
+	}
+
+	path, _ := profilesPath()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, secret := range []string{"s3cret", "db.example.com", "prod"} {
+		if strings.Contains(string(raw), secret) {
+			t.Fatalf("%q is readable in the encrypted file", secret)
+		}
+	}
+
+	// A fresh session starts locked and stays locked until the key is right.
+	fresh := &Tester{}
+	if _, err := fresh.ListProfiles(); !errors.Is(err, errLocked) {
+		t.Fatalf("locked store should refuse to list, got %v", err)
+	}
+	if err := fresh.UnlockProfiles("wrong horse"); err == nil {
+		t.Fatal("wrong key was accepted")
+	}
+	if err := fresh.UnlockProfiles("correct horse"); err != nil {
+		t.Fatal(err)
+	}
+	got, err = fresh.ListProfiles()
+	if err != nil || len(got) != 2 {
+		t.Fatalf("unlock did not restore the profiles: %+v %v", got, err)
+	}
+}
+
+func TestProfilesRemovingEncryptionClearsPasswords(t *testing.T) {
+	withTempConfigDir(t)
+	tester := &Tester{}
+	if err := tester.SetProfilesSecret("key"); err != nil {
+		t.Fatal(err)
+	}
+	if err := tester.SaveProfile(sampleProfile("prod", true)); err != nil {
+		t.Fatal(err)
+	}
+	if err := tester.SetProfilesSecret(""); err != nil {
+		t.Fatal(err)
+	}
+	got, err := tester.ListProfiles()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Config.Password != "" {
+		t.Fatalf("password survived decryption: %+v", got)
+	}
+}
+
+func TestProfilesTamperedFileIsRejected(t *testing.T) {
+	withTempConfigDir(t)
+	tester := &Tester{}
+	if err := tester.SetProfilesSecret("key"); err != nil {
+		t.Fatal(err)
+	}
+	if err := tester.SaveProfile(sampleProfile("prod", true)); err != nil {
+		t.Fatal(err)
+	}
+
+	path, _ := profilesPath()
+	raw, _ := os.ReadFile(path)
+	var v vault
+	if err := json.Unmarshal(raw, &v); err != nil {
+		t.Fatal(err)
+	}
+	// Flip one ciphertext byte: GCM must refuse rather than hand back garbage.
+	payload, _ := base64.StdEncoding.DecodeString(v.Payload)
+	payload[len(payload)/2] ^= 0x01
+	v.Payload = base64.StdEncoding.EncodeToString(payload)
+	edited, _ := json.Marshal(v)
+	if err := os.WriteFile(path, edited, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := (&Tester{}).UnlockProfiles("key"); err == nil {
+		t.Fatal("tampered vault was accepted")
+	}
+}
+
+func TestSaveProfileNameValidation(t *testing.T) {
+	withTempConfigDir(t)
+	if err := (&Tester{}).SaveProfile(SaveProfileRequest{Name: "   "}); err == nil {
+		t.Fatal("blank name was accepted")
+	}
+	// Names render straight into the picker, so keep control characters out.
+	if err := (&Tester{}).SaveProfile(SaveProfileRequest{Name: "bad\x00name"}); err == nil {
+		t.Fatal("control character in name was accepted")
+	}
+}
+
+func TestBackupArgsMapOptions(t *testing.T) {
+	opts := BackupOptions{
+		Config: Config{Database: "shop"}, Tables: []string{"orders", "users"},
+		SchemaOnly: true, Routines: true, SingleTransaction: true,
+	}
+	got := strings.Join(opts.args("/tmp/x.cnf"), " ")
+	for _, want := range []string{"--defaults-file=/tmp/x.cnf", "--no-data", "--routines", "--single-transaction", "--skip-triggers", "--skip-add-drop-table", "shop orders users"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("args %q missing %q", got, want)
+		}
+	}
+	// --defaults-file is ignored unless it is the first argument.
+	if !strings.HasPrefix(got, "--defaults-file=") {
+		t.Fatalf("defaults-file must come first: %q", got)
+	}
+}
+
+func TestDefaultsFileIsPrivateAndHoldsThePassword(t *testing.T) {
+	path, err := defaultsFile(Config{Host: "h", Port: 3307, User: "u", Password: "p@ss", TLS: "skip-verify"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(path)
+
+	st, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The whole point of the file is keeping the password off the command line,
+	// so it must not be readable by anyone else.
+	if runtime.GOOS != "windows" && st.Mode().Perm() != 0o600 {
+		t.Fatalf("mode = %v, want 0600", st.Mode().Perm())
+	}
+	body, _ := os.ReadFile(path)
+	for _, want := range []string{"[client]", "host=h", "port=3307", "user=u", "password=p@ss", "ssl-mode=REQUIRED"} {
+		if !strings.Contains(string(body), want) {
+			t.Fatalf("defaults file missing %q:\n%s", want, body)
+		}
+	}
+}
+
+func TestProfilesImportFromFile(t *testing.T) {
+	withTempConfigDir(t)
+	source := &Tester{}
+	if err := source.SetProfilesSecret("export key"); err != nil {
+		t.Fatal(err)
+	}
+	if err := source.SaveProfile(sampleProfile("prod", true)); err != nil {
+		t.Fatal(err)
+	}
+	// Export copies the vault verbatim, so the file on disk is the export.
+	vaultPath, _ := profilesPath()
+	exported := filepath.Join(t.TempDir(), "exported.json")
+	data, err := os.ReadFile(vaultPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(exported, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// A dropped file has to answer "do I need a key?" before anything prompts.
+	withTempConfigDir(t) // a different machine: empty vault
+	target := &Tester{}
+	encrypted, err := target.ImportEncrypted(exported)
+	if err != nil || !encrypted {
+		t.Fatalf("ImportEncrypted = %v, %v; want true", encrypted, err)
+	}
+	if _, err := target.ImportProfiles(exported, "wrong key", false); err == nil {
+		t.Fatal("import accepted the wrong key")
+	}
+
+	names, err := target.ImportProfiles(exported, "export key", false)
+	if err != nil || len(names) != 1 || names[0] != "prod" {
+		t.Fatalf("import = %v, %v", names, err)
+	}
+	got, err := target.ListProfiles()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Name != "prod" {
+		t.Fatalf("got %+v", got)
+	}
+	// The receiving vault is plaintext, so the imported password is dropped
+	// rather than being written out in the clear.
+	if got[0].Config.Password != "" {
+		t.Fatal("password landed in an unencrypted vault")
+	}
+
+	// Import into an encrypted vault and it survives.
+	if err := target.SetProfilesSecret("local key"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := target.ImportProfiles(exported, "export key", false); err != nil {
+		t.Fatal(err)
+	}
+	got, _ = target.ListProfiles()
+	if len(got) != 1 || got[0].Config.Password != "s3cret" {
+		t.Fatalf("password did not survive into an encrypted vault: %+v", got)
+	}
+}
+
+func TestImportEncryptedIsFalseForPlaintext(t *testing.T) {
+	withTempConfigDir(t)
+	tester := &Tester{}
+	if err := tester.SaveProfile(sampleProfile("prod", false)); err != nil {
+		t.Fatal(err)
+	}
+	path, _ := profilesPath()
+	// A plaintext export must not make the UI ask for a key it does not need.
+	encrypted, err := tester.ImportEncrypted(path)
+	if err != nil || encrypted {
+		t.Fatalf("ImportEncrypted = %v, %v; want false", encrypted, err)
+	}
+	names, err := tester.ImportProfiles(path, "", false)
+	if err != nil || len(names) != 1 {
+		t.Fatalf("import without a key = %v, %v", names, err)
+	}
+}
+
+func TestImportEncryptedRejectsNonsense(t *testing.T) {
+	junk := filepath.Join(t.TempDir(), "notes.json")
+	if err := os.WriteFile(junk, []byte(`{"hello":"world"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := (&Tester{}).ImportEncrypted(junk); err == nil {
+		t.Fatal("a file that is not a vault was accepted")
 	}
 }
