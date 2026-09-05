@@ -399,12 +399,48 @@ func (t *Tester) SetProfilesSecret(newSecret string) error {
 	return t.profiles.store(profiles, true)
 }
 
-// ExportProfiles copies the vault to a file the user picks, byte for byte:
-// an encrypted vault stays encrypted, and only the same secret opens it.
-func (t *Tester) ExportProfiles() (string, error) {
+// exportBytes renders the vault to export. A non-empty secret encrypts it and
+// keeps the stored passwords; an empty secret writes plain JSON with the
+// passwords stripped, because a readable file is no place for them.
+func (t *Tester) exportBytes(secret string) ([]byte, error) {
+	t.profiles.mu.Lock()
+	defer t.profiles.mu.Unlock()
+
+	_, profiles, err := t.profiles.load()
+	if err != nil {
+		return nil, err
+	}
+	if len(profiles) == 0 {
+		return nil, errors.New("there is nothing saved to export yet")
+	}
+
+	out := &vault{Version: vaultVersion, Profiles: profiles}
+	if secret != "" {
+		if out, err = sealProfiles(secret, profiles); err != nil {
+			return nil, err
+		}
+	} else {
+		stripped := make([]Profile, len(profiles))
+		for i, p := range profiles {
+			p.Config.Password = ""
+			stripped[i] = p
+		}
+		out.Profiles = stripped
+	}
+	return json.MarshalIndent(out, "", "  ")
+}
+
+// ExportProfiles writes the profiles to a file the user picks. The export key
+// is independent of the local one, so a vault can be handed to another machine
+// without sharing the key that guards this one.
+func (t *Tester) ExportProfiles(secret string) (string, error) {
 	app := application.Get()
 	if app == nil {
 		return "", errors.New("no application window")
+	}
+	data, err := t.exportBytes(secret)
+	if err != nil {
+		return "", err
 	}
 	path, err := app.Dialog.SaveFile().
 		SetMessage("Export profiles").
@@ -414,20 +450,6 @@ func (t *Tester) ExportProfiles() (string, error) {
 	if err != nil || path == "" {
 		return "", err
 	}
-
-	t.profiles.mu.Lock()
-	defer t.profiles.mu.Unlock()
-	src, err := profilesPath()
-	if err != nil {
-		return "", err
-	}
-	data, err := os.ReadFile(src)
-	if errors.Is(err, os.ErrNotExist) {
-		return "", errors.New("there is nothing saved to export yet")
-	}
-	if err != nil {
-		return "", err
-	}
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		return "", err
 	}
@@ -435,7 +457,7 @@ func (t *Tester) ExportProfiles() (string, error) {
 }
 
 // ImportEncrypted reports whether a file needs a key before it can be imported,
-// so a dropped file only prompts when it has to.
+// so a chosen or dropped file only prompts when it has to.
 func (t *Tester) ImportEncrypted(path string) (bool, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {

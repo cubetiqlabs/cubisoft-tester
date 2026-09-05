@@ -53,16 +53,17 @@ export function Diagnose(cfg: $models.Config): $CancellablePromise<$models.Diagn
 }
 
 /**
- * ExportProfiles copies the vault to a file the user picks, byte for byte:
- * an encrypted vault stays encrypted, and only the same secret opens it.
+ * ExportProfiles writes the profiles to a file the user picks. The export key
+ * is independent of the local one, so a vault can be handed to another machine
+ * without sharing the key that guards this one.
  */
-export function ExportProfiles(): $CancellablePromise<string> {
-    return $Call.ByID(967862481);
+export function ExportProfiles(secret: string): $CancellablePromise<string> {
+    return $Call.ByID(967862481, secret);
 }
 
 /**
  * ImportEncrypted reports whether a file needs a key before it can be imported,
- * so a dropped file only prompts when it has to.
+ * so a chosen or dropped file only prompts when it has to.
  */
 export function ImportEncrypted(path: string): $CancellablePromise<boolean> {
     return $Call.ByID(2143172424, path);

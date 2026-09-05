@@ -403,10 +403,9 @@ func TestProfilesImportFromFile(t *testing.T) {
 	if err := source.SaveProfile(sampleProfile("prod", true)); err != nil {
 		t.Fatal(err)
 	}
-	// Export copies the vault verbatim, so the file on disk is the export.
-	vaultPath, _ := profilesPath()
+	// Export under a key of its own, which is what carries the passwords.
 	exported := filepath.Join(t.TempDir(), "exported.json")
-	data, err := os.ReadFile(vaultPath)
+	data, err := source.exportBytes("export key")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -480,5 +479,69 @@ func TestImportEncryptedRejectsNonsense(t *testing.T) {
 	}
 	if _, err := (&Tester{}).ImportEncrypted(junk); err == nil {
 		t.Fatal("a file that is not a vault was accepted")
+	}
+}
+
+func TestExportCarriesPasswordsOnlyWhenEncrypted(t *testing.T) {
+	withTempConfigDir(t)
+	tester := &Tester{}
+	if err := tester.SetProfilesSecret("local key"); err != nil {
+		t.Fatal(err)
+	}
+	if err := tester.SaveProfile(sampleProfile("prod", true)); err != nil {
+		t.Fatal(err)
+	}
+
+	// A plaintext export is a readable file, so the password must not be in it.
+	plain, err := tester.exportBytes("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(plain), "s3cret") {
+		t.Fatalf("password written to a plaintext export:\n%s", plain)
+	}
+	var v vault
+	if err := json.Unmarshal(plain, &v); err != nil {
+		t.Fatal(err)
+	}
+	if v.Encrypted || len(v.Profiles) != 1 || v.Profiles[0].Config.Password != "" {
+		t.Fatalf("unexpected plaintext export: %+v", v)
+	}
+
+	// An encrypted export keeps them, under a key that is not the local one.
+	sealed, err := tester.exportBytes("export key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(sealed), "s3cret") || strings.Contains(string(sealed), "prod") {
+		t.Fatal("encrypted export leaks readable content")
+	}
+	out := filepath.Join(t.TempDir(), "e.json")
+	if err := os.WriteFile(out, sealed, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	withTempConfigDir(t)
+	target := &Tester{}
+	if err := target.SetProfilesSecret("other machine key"); err != nil {
+		t.Fatal(err)
+	}
+	// The local key and the export key are deliberately different.
+	if _, err := target.ImportProfiles(out, "other machine key", false); err == nil {
+		t.Fatal("the local key opened an export sealed with a different key")
+	}
+	if _, err := target.ImportProfiles(out, "export key", false); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := target.ListProfiles()
+	if len(got) != 1 || got[0].Config.Password != "s3cret" {
+		t.Fatalf("password did not travel with the export: %+v", got)
+	}
+}
+
+func TestExportRefusesWhenEmpty(t *testing.T) {
+	withTempConfigDir(t)
+	if _, err := (&Tester{}).exportBytes(""); err == nil {
+		t.Fatal("exported an empty vault")
 	}
 }

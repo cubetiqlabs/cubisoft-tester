@@ -561,8 +561,12 @@ async function unlockAction() {
 }
 
 async function exportProfilesAction() {
+    const r = await ask("Export profiles",
+        "Give the export a key to encrypt it and carry the saved passwords with it. Leave it blank for plain JSON, which is exported without passwords.",
+        { label: "Key for this export", type: "password" });
+    if (!r) return;
     try {
-        const path = await Tester.ExportProfiles();
+        const path = await Tester.ExportProfiles(r.value);
         setStatus(path ? `Exported to ${path}` : "Export cancelled.", path ? "ok" : "idle");
     } catch (err) {
         setStatus(errText(err), "bad");
@@ -753,3 +757,116 @@ $("conn").addEventListener("change", saveForm);
 document.addEventListener("keydown", (e) => {
     if ((e.metaKey || e.ctrlKey) && e.key === "Enter") void run();
 });
+
+/* ---------- custom select ---------- */
+
+// The native popup is drawn by the OS and cannot be themed, so every <select>
+// keeps its element (it stays the source of truth for value, options and
+// change events) and gets a styled control rendered over it. Existing code that
+// reads `.value` or rebuilds `.innerHTML` needs no changes.
+function enhanceSelect(select: HTMLSelectElement) {
+    select.classList.add("native-hidden");
+
+    const wrap = document.createElement("div");
+    wrap.className = "sel";
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "sel-btn";
+    button.setAttribute("aria-haspopup", "listbox");
+    button.setAttribute("aria-expanded", "false");
+    button.innerHTML = `<span class="sel-label"></span>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>`;
+    const menu = document.createElement("div");
+    menu.className = "sel-menu";
+    menu.setAttribute("role", "listbox");
+    menu.hidden = true;
+
+    select.parentNode!.insertBefore(wrap, select);
+    wrap.append(select, button, menu);
+
+    const label = button.querySelector(".sel-label") as HTMLElement;
+    const sync = () => {
+        label.textContent = select.selectedOptions[0]?.text ?? "";
+        button.disabled = select.disabled;
+        button.title = select.title;
+    };
+
+    // Options are rendered on open, so a select whose innerHTML was replaced
+    // needs no notification.
+    const render = () => {
+        menu.innerHTML = "";
+        for (const node of select.children) {
+            if (node instanceof HTMLOptGroupElement) {
+                const head = document.createElement("div");
+                head.className = "sel-group";
+                head.textContent = node.label;
+                menu.append(head);
+                for (const opt of node.children) addItem(opt as HTMLOptionElement);
+            } else if (node instanceof HTMLOptionElement) {
+                addItem(node);
+            }
+        }
+    };
+
+    function addItem(opt: HTMLOptionElement) {
+        const item = document.createElement("div");
+        item.className = "sel-item";
+        item.setAttribute("role", "option");
+        item.tabIndex = -1;
+        item.textContent = opt.text;
+        const selected = opt.selected && !opt.dataset.action;
+        item.setAttribute("aria-selected", String(selected));
+        if (selected) item.classList.add("is-selected");
+        item.addEventListener("click", () => {
+            close();
+            // Selecting through the real element keeps one source of truth.
+            select.selectedIndex = opt.index;
+            select.dispatchEvent(new Event("change"));
+        });
+        menu.append(item);
+    }
+
+    const open = () => {
+        if (select.disabled) return;
+        render();
+        menu.hidden = false;
+        button.setAttribute("aria-expanded", "true");
+        // Land on the current choice so the arrows walk from there.
+        const start = menu.querySelector<HTMLElement>(".is-selected") ?? menu.querySelector<HTMLElement>(".sel-item");
+        start?.scrollIntoView({ block: "nearest" });
+        start?.focus();
+        document.addEventListener("pointerdown", onOutside, true);
+    };
+    const close = () => {
+        menu.hidden = true;
+        button.setAttribute("aria-expanded", "false");
+        document.removeEventListener("pointerdown", onOutside, true);
+    };
+    const onOutside = (e: Event) => {
+        if (!wrap.contains(e.target as Node)) close();
+    };
+
+    button.addEventListener("click", () => (menu.hidden ? open() : close()));
+
+    // Arrow keys move through the list; Enter commits, Escape backs out.
+    wrap.addEventListener("keydown", (e) => {
+        const items = [...menu.querySelectorAll<HTMLElement>(".sel-item")];
+        if (menu.hidden) {
+            if (e.key === "ArrowDown" || e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); }
+            return;
+        }
+        const at = items.indexOf(document.activeElement as HTMLElement);
+        if (e.key === "Escape") { e.preventDefault(); close(); button.focus(); }
+        else if (e.key === "ArrowDown") { e.preventDefault(); items[Math.min(at + 1, items.length - 1)]?.focus(); }
+        else if (e.key === "ArrowUp") { e.preventDefault(); (at <= 0 ? items[0] : items[at - 1])?.focus(); }
+        else if (e.key === "Enter" || e.key === " ") { e.preventDefault(); (document.activeElement as HTMLElement)?.click(); button.focus(); }
+    });
+
+    select.addEventListener("change", sync);
+    // refreshProfiles rebuilds the options wholesale, so watch rather than
+    // asking every caller to remember to re-sync.
+    new MutationObserver(sync).observe(select, { childList: true, subtree: true, attributes: true });
+    sync();
+}
+
+document.querySelectorAll<HTMLSelectElement>("select").forEach(enhanceSelect);

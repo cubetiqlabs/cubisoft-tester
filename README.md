@@ -14,8 +14,9 @@ the problem. Targets MySQL 5.6 through 8.x. Built with Go and [Wails v3](https:/
 Connections you use often can be saved as profiles from the picker in the
 sidebar. Tick "Save the password too" and the app asks for a secret key, then
 keeps the whole profile file encrypted. Export and import live in the **File**
-menu, and an exported file can also be dropped straight onto the window — you are
-asked for its key only if it has one.
+menu; give the export a key of its own and the saved passwords travel with it.
+An exported file can also be dropped straight onto the window — you are asked
+for its key only if it has one.
 
 ## Install
 
@@ -114,8 +115,9 @@ your servers is collected or sent anywhere.
   (600,000 iterations), and a password is kept only for profiles you asked to
   keep it for. The key is held in memory for the session only, and there is no
   recovery if you lose it.
-- Export writes that same file, byte for byte: an encrypted export stays
-  encrypted and needs the same key to import.
+- Export asks for a key of its own, separate from the local one. With a key the
+  file is encrypted and carries the saved passwords; without one it is plain
+  JSON and the passwords are stripped out of it.
 - Backup and restore run the `mysqldump` and `mysql` binaries already on your
   machine. Credentials are passed in a 0600 temp file, never on the command
   line where every process listing would see them.

@@ -235,6 +235,108 @@ dialog menu {
     cursor: pointer;
 }
 
+/* ---------- custom select ---------- */
+
+/* The native element stays in the DOM as the source of truth, but out of sight:
+   display:none would drop it from form semantics and focus handling. */
+.native-hidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    opacity: 0;
+    pointer-events: none;
+}
+
+.sel {
+    position: relative;
+    width: 100%;
+}
+
+.sel-btn {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 7px 9px;
+    font: inherit;
+    text-align: left;
+    color: var(--text);
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    cursor: pointer;
+}
+
+.sel-btn:hover { border-color: var(--border-strong); }
+
+.sel-btn:focus-visible {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.sel-btn:disabled { opacity: .55; cursor: default; }
+
+.sel-label {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.sel-btn svg {
+    flex: none;
+    width: 14px;
+    height: 14px;
+    color: var(--text-faint);
+}
+
+.sel-menu {
+    position: absolute;
+    z-index: 20;
+    top: calc(100% + 4px);
+    left: 0;
+    right: 0;
+    max-height: 260px;
+    padding: 4px;
+    overflow-y: auto;
+    background: var(--bg-panel);
+    border: 1px solid var(--border-strong);
+    border-radius: 6px;
+    box-shadow: 0 12px 32px rgba(0, 0, 0, .4);
+}
+
+.sel-group {
+    padding: 7px 8px 3px;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+    color: var(--text-faint);
+}
+
+.sel-item {
+    padding: 6px 8px;
+    border-radius: 4px;
+    cursor: pointer;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.sel-item:hover,
+.sel-item:focus-visible {
+    outline: none;
+    background: var(--bg-raised);
+}
+
+.sel-item.is-selected {
+    color: var(--accent);
+    background: var(--accent-soft);
+}
+
 /* ---------- main ---------- */
 
 .main {
