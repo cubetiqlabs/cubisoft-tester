@@ -11,12 +11,19 @@ the problem. Targets MySQL 5.6 through 8.x. Built with Go and [Wails v3](https:/
 | **Speed test** | How fast can this client insert, read, update, commit and delete? |
 | **Backup** | What is in this database, how big is it, and can I dump and restore it? |
 
+The speed test draws itself as it runs: throughput per phase on a log axis, so a
+bulk insert at 10 MiB/s and a cached scan at 500 are both readable, and a stall
+or a sawtooth shows up where the summary numbers cannot.
+
 Connections you use often can be saved as profiles from the picker in the
 sidebar. Tick "Save the password too" and the app asks for a secret key, then
 keeps the whole profile file encrypted. Export and import live in the **File**
 menu; give the export a key of its own and the saved passwords travel with it.
 An exported file can also be dropped straight onto the window — you are asked
 for its key only if it has one.
+
+Appearance follows the system theme by default; **View → Appearance** switches
+it to Light or Dark and remembers the choice.
 
 ## Install
 
@@ -107,7 +114,8 @@ your servers is collected or sent anywhere.
 - Results stay on your machine until you copy them yourself. "Copy report"
   puts JSON on your clipboard and nowhere else.
 - The connection form (never the password) is kept in the app's local storage
-  so you don't retype it.
+  so you don't retype it, and the appearance choice in a `settings.json` beside
+  the profiles.
 - Profiles live in one file: `profiles.json` under your OS config directory —
   hover the profile picker for the exact path. Without a secret key it is plain
   JSON, and passwords are refused rather than written to it. With one, the whole

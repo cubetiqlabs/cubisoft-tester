@@ -29,6 +29,24 @@ func setupMenu(app *application.App) {
 	// Without an Edit menu the webview loses cut, copy, paste and select-all,
 	// which would break every text field in the app.
 	menu.AddRole(application.EditMenu)
+
+	// The radios start from the stored preference so the checkmark matches what
+	// the window is actually showing.
+	current := readSettings().Theme
+	view := menu.AddSubmenu("View")
+	appearance := view.AddSubmenu("Appearance")
+	for _, choice := range []struct{ id, label string }{
+		{"system", "Match System"},
+		{"light", "Light"},
+		{"dark", "Dark"},
+	} {
+		id := choice.id
+		appearance.AddRadio(choice.label, id == current).OnClick(func(*application.Context) {
+			_ = (&Tester{}).SetTheme(id)
+			app.Event.Emit("menu", "theme."+id)
+		})
+	}
+
 	menu.AddRole(application.WindowMenu)
 
 	app.Menu.SetApplicationMenu(menu)

@@ -120,6 +120,7 @@
                 <label class="check"><input id="sp-keep" type="checkbox"/> Keep table</label>
             </div>
             <p class="opts-note warn">Creates a temporary table in the selected database, writes and reads real rows, then drops it.</p>
+            <div class="chart" id="speed-chart" hidden></div>
             <div class="output" id="out-speed"><p class="empty">Pick a database on the left, then Run.</p></div>
         </section>
         <section class="panel" id="panel-backup" data-panel="backup">
@@ -152,8 +153,8 @@
         <label id="ask-field"><span id="ask-label"></span><input id="ask-input" type="text"/></label>
         <label id="ask-check" class="check"><input id="ask-checkbox" type="checkbox"/> <span id="ask-check-label"></span></label>
         <menu>
-            <button value="" class="btn ghost small">Cancel</button>
             <button value="ok" id="ask-ok" class="btn small">OK</button>
+            <button value="" class="btn ghost small">Cancel</button>
         </menu>
     </form>
 </dialog>

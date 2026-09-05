@@ -2,8 +2,8 @@ import { Events, Updater } from "@wailsio/runtime";
 import { Tester } from "../bindings/github.com/sombochea/cubisoft-tester";
 import type {
     BackupResult, Config, DiagnoseResult, Hop, LatencyResult, Phase, Profile,
-    Progress, RestoreResult, Series, ServerInfo, SpeedResult, Step, TableInfo,
-    Toolbox, TraceResult,
+    Progress, RestoreResult, Sample, Series, ServerInfo, SpeedResult, Step,
+    TableInfo, Toolbox, TraceResult,
 } from "../bindings/github.com/sombochea/cubisoft-tester";
 
 type Tab = "diagnose" | "latency" | "trace" | "speed" | "backup";
@@ -169,6 +169,8 @@ async function run() {
                 break;
             }
             case "speed": {
+                samples = [];
+                drawChart();
                 const r = await Tester.SpeedTest({
                     config: config(), rows: num("sp-rows"), payloadBytes: num("sp-payload"),
                     batchSize: num("sp-batch"), transactions: num("sp-tx"),
@@ -196,7 +198,7 @@ function failedStep(r: DiagnoseResult): string {
 /* ---------- shared rendering ---------- */
 
 function card(title: string, body: string, raw = false) {
-    return `<section class="card"><h2>${esc(title)}</h2>${raw ? body : `<div class="card-body">${body}</div>`}</section>`;
+    return `<section class="card" style="margin-top: 1rem;"><h2>${esc(title)}</h2>${raw ? body : `<div class="card-body">${body}</div>`}</section>`;
 }
 
 function metrics(items: [string, string][]) {
@@ -607,6 +609,7 @@ Events.On("menu", (e: { data: string }) => {
     if (e.data === "profiles.export") void exportProfilesAction();
     if (e.data === "profiles.import") void importFrom("");
     if (e.data === "app.update") void checkUpdates();
+    if (e.data.startsWith("theme.")) applyTheme(e.data.slice("theme.".length));
 });
 
 /* ---------- backup ---------- */
@@ -748,6 +751,19 @@ const checkUpdates = async () => {
 updateBtn.addEventListener("click", () => void checkUpdates());
 $("check-update").addEventListener("click", () => void checkUpdates());
 
+/* ---------- appearance ---------- */
+
+// "system" leaves the attribute off so the prefers-color-scheme rules apply.
+function applyTheme(theme: string) {
+    if (theme === "light" || theme === "dark") {
+        document.documentElement.dataset.theme = theme;
+    } else {
+        delete document.documentElement.dataset.theme;
+    }
+}
+
+Tester.Settings().then((s) => applyTheme(s.theme));
+
 /* ---------- boot ---------- */
 
 loadForm();
@@ -870,3 +886,92 @@ function enhanceSelect(select: HTMLSelectElement) {
 }
 
 document.querySelectorAll<HTMLSelectElement>("select").forEach(enhanceSelect);
+
+/* ---------- live speed-test chart ---------- */
+
+// Throughput as the run happens. A flat line means steady work; a sawtooth or a
+// gap is the interesting part, and it is invisible in the summary numbers.
+const chartEl = $("speed-chart");
+let samples: Sample[] = [];
+let chartQueued = false;
+
+// Fixed hues rather than theme tokens: the phases need to stay apart from each
+// other, and these read on both backgrounds.
+const PHASE_COLOURS = ["#4f8cff", "#3ecf8e", "#f0b429", "#c084fc", "#f26d6d", "#22d3ee"];
+
+Events.On("speed:sample", (e: { data: Sample }) => {
+    samples.push(e.data);
+    if (chartQueued) return;
+    chartQueued = true;
+    requestAnimationFrame(() => {
+        chartQueued = false;
+        drawChart();
+    });
+});
+
+function drawChart() {
+    // Phases that move no bytes (create table, rollback check) have nothing to
+    // plot on a throughput axis, so they are left out rather than drawn on the
+    // floor.
+    const plotted = samples.filter((s) => s.miBPerSec > 0);
+    if (!plotted.length) {
+        chartEl.hidden = true;
+        return;
+    }
+    chartEl.hidden = false;
+
+    const W = 1000, H = 160, padL = 52, padB = 18, padT = 8;
+    const maxT = Math.max(...plotted.map((s) => s.tMs), 1);
+
+    // A run spans orders of magnitude — a bulk insert at 10 MiB/s next to a
+    // cached scan at 500 — so a linear axis flattens every write phase into the
+    // baseline. Log10 keeps them all readable and still shows the real numbers.
+    const peak = Math.max(...plotted.map((s) => s.miBPerSec), 0.01);
+    const top = Math.ceil(Math.log10(peak));
+    const bottom = top - 4;
+    const norm = (v: number) => (Math.log10(Math.max(v, 10 ** bottom)) - bottom) / (top - bottom);
+    const x = (t: number) => padL + (t / maxT) * (W - padL - 8);
+    const y = (v: number) => padT + (1 - norm(v)) * (H - padT - padB);
+
+    // One polyline per phase, in the order the phases first appeared.
+    const order: string[] = [];
+    const byPhase = new Map<string, Sample[]>();
+    for (const s of plotted) {
+        if (!byPhase.has(s.phase)) { byPhase.set(s.phase, []); order.push(s.phase); }
+        byPhase.get(s.phase)!.push(s);
+    }
+
+    const colourOf = (phase: string) => PHASE_COLOURS[order.indexOf(phase) % PHASE_COLOURS.length];
+    // Short phases produce a single reading, and a one-point polyline draws
+    // nothing — so every reading also gets a dot.
+    const lines = order.map((phase) => {
+        const rows = byPhase.get(phase)!;
+        const colour = colourOf(phase);
+        const pts = rows.map((s) => `${x(s.tMs).toFixed(1)},${y(s.miBPerSec).toFixed(1)}`);
+        const dots = rows.map((s) =>
+            `<circle cx="${x(s.tMs).toFixed(1)}" cy="${y(s.miBPerSec).toFixed(1)}" r="3" fill="${colour}"/>`).join("");
+        const line = pts.length > 1
+            ? `<polyline points="${pts.join(" ")}" stroke="${colour}" vector-effect="non-scaling-stroke"/>`
+            : "";
+        return line + dots;
+    }).join("");
+
+    const decades: number[] = [];
+    for (let d = bottom; d <= top; d++) decades.push(10 ** d);
+    const grid = decades.map((v) => {
+        const gy = y(v);
+        const label = v >= 1 ? String(v) : v.toFixed(String(v).length - 2);
+        return `<line class="grid" x1="${padL}" y1="${gy}" x2="${W - 8}" y2="${gy}"/>
+                <text class="axis" x="${padL - 6}" y="${gy + 3}" text-anchor="end">${label}</text>`;
+    }).join("");
+
+    chartEl.innerHTML = `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="Throughput over time">
+        ${grid}
+        <text class="axis" x="${padL}" y="${H - 4}">0 s</text>
+        <text class="axis" x="${W - 8}" y="${H - 4}" text-anchor="end">${(maxT / 1000).toFixed(1)} s</text>
+        <text class="axis" x="${W - 8}" y="${padT + 8}" text-anchor="end">MiB/s, log scale</text>
+        ${lines}
+    </svg>
+    <div class="chart-legend">${order.map((p) =>
+        `<span><b style="background:${colourOf(p)}"></b>${esc(p)}</span>`).join("")}</div>`;
+}

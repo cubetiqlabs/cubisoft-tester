@@ -38,6 +38,7 @@ func init() {
 	application.RegisterEvent[Progress]("progress")
 	application.RegisterEvent[string]("menu")
 	application.RegisterEvent[string]("files-dropped")
+	application.RegisterEvent[Sample]("speed:sample")
 }
 
 func main() {
@@ -70,6 +71,9 @@ func main() {
 		},
 		BackgroundColour: application.NewRGB(15, 17, 22),
 		URL:              "/",
+		// Windows and Linux only show the application menu when a window opts
+		// in; without this the File menu simply does not exist there.
+		UseApplicationMenu: true,
 		// Lets an exported profile file be dropped straight onto the window.
 		EnableFileDrop: true,
 	})

@@ -545,3 +545,35 @@ func TestExportRefusesWhenEmpty(t *testing.T) {
 		t.Fatal("exported an empty vault")
 	}
 }
+
+func TestSettingsRoundTrip(t *testing.T) {
+	withTempConfigDir(t)
+	tester := &Tester{}
+
+	// A missing file is not an error: the default is to follow the system.
+	if got := tester.Settings(); got.Theme != "system" {
+		t.Fatalf("default theme = %q, want system", got.Theme)
+	}
+	if err := tester.SetTheme("dark"); err != nil {
+		t.Fatal(err)
+	}
+	if got := tester.Settings(); got.Theme != "dark" {
+		t.Fatalf("theme = %q, want dark", got.Theme)
+	}
+	if err := tester.SetTheme("chartreuse"); err == nil {
+		t.Fatal("unknown theme accepted")
+	}
+
+	// Settings live beside the profiles but in their own file, so a broken one
+	// cannot take the profiles with it.
+	path, _ := settingsPath()
+	if err := os.WriteFile(path, []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := tester.Settings(); got.Theme != "system" {
+		t.Fatalf("corrupt settings should fall back to system, got %q", got.Theme)
+	}
+	if err := tester.SaveProfile(sampleProfile("prod", false)); err != nil {
+		t.Fatalf("corrupt settings broke the profiles: %v", err)
+	}
+}

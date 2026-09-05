@@ -123,6 +123,12 @@ export interface LatencyResult {
  */
 export interface Phase {
     "name": string;
+
+    /**
+     * Key is the short label the live chart groups by, so a phase's streaming
+     * samples and its closing sample land on the same line.
+     */
+    "key": string;
     "ok": boolean;
     "rows": number;
     "bytes": number;
@@ -200,6 +206,17 @@ export interface RestoreResult {
 }
 
 /**
+ * Sample is one live throughput reading, emitted on "speed:sample" while a
+ * speed test runs so the UI can draw the run as it happens.
+ */
+export interface Sample {
+    "phase": string;
+    "tMs": number;
+    "rowsPerSec": number;
+    "miBPerSec": number;
+}
+
+/**
  * SaveProfileRequest is one save. SavePassword is a per-save choice rather than
  * part of the profile, so it lives here and not on Profile.
  */
@@ -259,6 +276,17 @@ export interface ServerInfo {
     "currentUser": string;
     "grants": string[] | null;
     "clockSkewMs": number;
+}
+
+/**
+ * Settings are the small preferences that outlive a session. Kept beside the
+ * profiles, in their own file, so a corrupt one cannot take the profiles down.
+ */
+export interface Settings {
+    /**
+     * Theme is "system", "light" or "dark".
+     */
+    "theme": string;
 }
 
 /**

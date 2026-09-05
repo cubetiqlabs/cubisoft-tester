@@ -149,6 +149,21 @@ export function SetProfilesSecret(newSecret: string): $CancellablePromise<void> 
 }
 
 /**
+ * SetTheme stores the appearance choice. The frontend applies it; this only
+ * remembers it for the next launch and for the menu's checkmark.
+ */
+export function SetTheme(theme: string): $CancellablePromise<void> {
+    return $Call.ByID(1115659352, theme);
+}
+
+/**
+ * Settings returns the stored preferences for the frontend to apply at startup.
+ */
+export function Settings(): $CancellablePromise<$models.Settings> {
+    return $Call.ByID(3480693916);
+}
+
+/**
  * SpeedTest inserts, reads, updates, commits and deletes real rows in a
  * throwaway table, so the numbers reflect the whole client-server path rather
  * than a synthetic ping.

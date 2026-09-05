@@ -15,6 +15,7 @@ declare module "@wailsio/runtime" {
             "files-dropped": string;
             "menu": string;
             "progress": main$0.Progress;
+            "speed:sample": main$0.Sample;
         }
     }
 }

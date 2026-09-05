@@ -30,7 +30,10 @@ type SpeedOptions struct {
 
 // Phase is one timed stage of the speed test.
 type Phase struct {
-	Name       string  `json:"name"`
+	Name string `json:"name"`
+	// Key is the short label the live chart groups by, so a phase's streaming
+	// samples and its closing sample land on the same line.
+	Key        string  `json:"key"`
 	OK         bool    `json:"ok"`
 	Rows       int64   `json:"rows"`
 	Bytes      int64   `json:"bytes"`
@@ -52,6 +55,62 @@ type SpeedResult struct {
 	Summary  string   `json:"summary"`
 	Warnings []string `json:"warnings"`
 	TotalMs  float64  `json:"totalMs"`
+}
+
+// Sample is one live throughput reading, emitted on "speed:sample" while a
+// speed test runs so the UI can draw the run as it happens.
+type Sample struct {
+	Phase      string  `json:"phase"`
+	TMs        float64 `json:"tMs"`
+	RowsPerSec float64 `json:"rowsPerSec"`
+	MiBPerSec  float64 `json:"miBPerSec"`
+}
+
+// meter accumulates work as a phase does it and publishes the rate on a timer.
+// Phases that run as a single statement have nothing to sample mid-flight, so
+// they report one final reading instead (see addPhase).
+type meter struct {
+	rows  atomic.Int64
+	bytes atomic.Int64
+	stop  func()
+}
+
+func (m *meter) add(rows, bytes int64) {
+	m.rows.Add(rows)
+	m.bytes.Add(bytes)
+}
+
+func (t *Tester) startMeter(phase string, runStart time.Time) *meter {
+	m := &meter{}
+	done := make(chan struct{})
+	go func() {
+		tick := time.NewTicker(250 * time.Millisecond)
+		defer tick.Stop()
+		var lastRows, lastBytes int64
+		last := time.Now()
+		for {
+			select {
+			case <-done:
+				return
+			case now := <-tick.C:
+				rows, bytes := m.rows.Load(), m.bytes.Load()
+				elapsed := now.Sub(last).Seconds()
+				last = now
+				if elapsed <= 0 {
+					continue
+				}
+				t.emit(Sample{
+					Phase:      phase,
+					TMs:        float64(now.Sub(runStart).Milliseconds()),
+					RowsPerSec: float64(rows-lastRows) / elapsed,
+					MiBPerSec:  float64(bytes-lastBytes) / (1 << 20) / elapsed,
+				})
+				lastRows, lastBytes = rows, bytes
+			}
+		}
+	}()
+	m.stop = func() { close(done) }
+	return m
 }
 
 // payloadAlphabet avoids quotes and backslashes so the driver's escaping does
@@ -126,6 +185,14 @@ func (t *Tester) SpeedTest(opts SpeedOptions) (res SpeedResult, err error) {
 	addPhase := func(p Phase) {
 		res.Phases = append(res.Phases, p)
 		t.progress("speedtest", p.Name, float64(len(res.Phases))/float64(phases)*100)
+		// One closing reading per phase, so single-statement phases still show
+		// up on the chart and every phase ends on its own average.
+		t.emit(Sample{
+			Phase:      p.Key,
+			TMs:        msSince(overall),
+			RowsPerSec: p.RowsPerSec,
+			MiBPerSec:  p.MiBPerSec,
+		})
 	}
 
 	// 1. Create.
@@ -139,7 +206,7 @@ func (t *Tester) SpeedTest(opts SpeedOptions) (res SpeedResult, err error) {
 		KEY idx_k (k)
 	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`
 	if _, err := db.ExecContext(ctx, ddl); err != nil {
-		addPhase(Phase{Name: "Create table", DurationMs: msSince(start), Error: errString(err), Hint: hint(err)})
+		addPhase(Phase{Name: "Create table", Key: "create", DurationMs: msSince(start), Error: errString(err), Hint: hint(err)})
 		return res, nil
 	}
 	defer func() {
@@ -151,30 +218,30 @@ func (t *Tester) SpeedTest(opts SpeedOptions) (res SpeedResult, err error) {
 		}
 	}()
 	engine := tableEngine(ctx, db, table)
-	addPhase(Phase{Name: "Create table", OK: true, DurationMs: msSince(start), Detail: table + " (" + engine + ")"})
+	addPhase(Phase{Name: "Create table", Key: "create", OK: true, DurationMs: msSince(start), Detail: table + " (" + engine + ")"})
 	if !strings.EqualFold(engine, "InnoDB") {
 		res.Warnings = append(res.Warnings,
 			fmt.Sprintf("Table was created as %s, not InnoDB. Transaction results below are meaningless on a non-transactional engine.", engine))
 	}
 
 	// 2. Bulk insert.
-	insert := t.insertPhase(ctx, db, qname, rows, payload, batch, workers)
+	insert := t.insertPhase(ctx, db, qname, rows, payload, batch, workers, overall)
 	addPhase(insert)
 	if !insert.OK {
 		return res, nil
 	}
 
 	// 3. Full scan: streaming read throughput.
-	addPhase(t.scanPhase(ctx, db, qname))
+	addPhase(t.scanPhase(ctx, db, qname, overall))
 
 	// 4. Point lookups: read latency rather than bandwidth.
-	addPhase(t.pointPhase(ctx, db, qname, min(rows, 200)))
+	addPhase(t.pointPhase(ctx, db, qname, min(rows, 200), overall))
 
 	// 5. Update.
 	addPhase(t.updatePhase(ctx, db, qname, payload))
 
 	// 6. Transactions.
-	addPhase(t.txPhase(ctx, db, qname, txCount, payload))
+	addPhase(t.txPhase(ctx, db, qname, txCount, payload, overall))
 
 	// 7. Rollback correctness.
 	addPhase(rollbackPhase(ctx, db, qname))
@@ -192,8 +259,10 @@ func (t *Tester) SpeedTest(opts SpeedOptions) (res SpeedResult, err error) {
 	return res, nil
 }
 
-func (t *Tester) insertPhase(ctx context.Context, db *sql.DB, qname string, rows, payload, batch, workers int) Phase {
-	p := Phase{Name: fmt.Sprintf("Insert %d rows x %s (%d/batch, %d conn)", rows, humanBytes(int64(payload)), batch, workers)}
+func (t *Tester) insertPhase(ctx context.Context, db *sql.DB, qname string, rows, payload, batch, workers int, since time.Time) Phase {
+	m := t.startMeter("insert", since)
+	defer m.stop()
+	p := Phase{Key: "insert", Name: fmt.Sprintf("Insert %d rows x %s (%d/batch, %d conn)", rows, humanBytes(int64(payload)), batch, workers)}
 	row := randPayload(payload)
 
 	batches := (rows + batch - 1) / batch
@@ -237,6 +306,7 @@ func (t *Tester) insertPhase(ctx context.Context, db *sql.DB, qname string, rows
 					return
 				}
 				atomic.AddInt64(&inserted, int64(n))
+				m.add(int64(n), int64(n)*int64(payload))
 				d := atomic.AddInt64(&doneBatches, 1)
 				t.progress("speedtest", "inserting", float64(d)/float64(batches)*100)
 			}
@@ -260,8 +330,10 @@ func (t *Tester) insertPhase(ctx context.Context, db *sql.DB, qname string, rows
 	return p
 }
 
-func (t *Tester) scanPhase(ctx context.Context, db *sql.DB, qname string) Phase {
-	p := Phase{Name: "Select: full table scan"}
+func (t *Tester) scanPhase(ctx context.Context, db *sql.DB, qname string, since time.Time) Phase {
+	m := t.startMeter("scan", since)
+	defer m.stop()
+	p := Phase{Key: "scan", Name: "Select: full table scan"}
 	start := time.Now()
 	rs, err := db.QueryContext(ctx, "SELECT id, k, payload FROM "+qname)
 	if err != nil {
@@ -279,6 +351,7 @@ func (t *Tester) scanPhase(ctx context.Context, db *sql.DB, qname string) Phase 
 		}
 		p.Rows++
 		p.Bytes += int64(len(payload))
+		m.add(1, int64(len(payload)))
 	}
 	if err := rs.Err(); err != nil {
 		p.DurationMs, p.Error = msSince(start), errString(err)
@@ -290,8 +363,10 @@ func (t *Tester) scanPhase(ctx context.Context, db *sql.DB, qname string) Phase 
 	return p
 }
 
-func (t *Tester) pointPhase(ctx context.Context, db *sql.DB, qname string, n int) Phase {
-	p := Phase{Name: fmt.Sprintf("Select: %d point lookups by primary key", n)}
+func (t *Tester) pointPhase(ctx context.Context, db *sql.DB, qname string, n int, since time.Time) Phase {
+	m := t.startMeter("point lookups", since)
+	defer m.stop()
+	p := Phase{Key: "point lookups", Name: fmt.Sprintf("Select: %d point lookups by primary key", n)}
 	var ids []int64
 	rs, err := db.QueryContext(ctx, "SELECT id FROM "+qname+" ORDER BY id LIMIT ?", n)
 	if err != nil {
@@ -321,6 +396,7 @@ func (t *Tester) pointPhase(ctx context.Context, db *sql.DB, qname string, n int
 		samples = append(samples, msSince(op))
 		p.Rows++
 		p.Bytes += int64(len(payload))
+		m.add(1, int64(len(payload)))
 	}
 	p.DurationMs = msSince(start)
 	p.Stats = summarize(samples)
@@ -332,7 +408,7 @@ func (t *Tester) pointPhase(ctx context.Context, db *sql.DB, qname string, n int
 }
 
 func (t *Tester) updatePhase(ctx context.Context, db *sql.DB, qname string, payload int) Phase {
-	p := Phase{Name: "Update: rewrite every payload"}
+	p := Phase{Key: "update", Name: "Update: rewrite every payload"}
 	start := time.Now()
 	r, err := db.ExecContext(ctx, "UPDATE "+qname+" SET payload = ?", randPayload(payload))
 	if err != nil {
@@ -347,8 +423,10 @@ func (t *Tester) updatePhase(ctx context.Context, db *sql.DB, qname string, payl
 	return p
 }
 
-func (t *Tester) txPhase(ctx context.Context, db *sql.DB, qname string, n, payload int) Phase {
-	p := Phase{Name: fmt.Sprintf("Transactions: %d insert+update+commit cycles", n)}
+func (t *Tester) txPhase(ctx context.Context, db *sql.DB, qname string, n, payload int, since time.Time) Phase {
+	m := t.startMeter("transactions", since)
+	defer m.stop()
+	p := Phase{Key: "transactions", Name: fmt.Sprintf("Transactions: %d insert+update+commit cycles", n)}
 	row := randPayload(payload)
 	samples := make([]float64, 0, n)
 	start := time.Now()
@@ -383,6 +461,7 @@ func (t *Tester) txPhase(ctx context.Context, db *sql.DB, qname string, n, paylo
 		}
 		samples = append(samples, msSince(op))
 		p.Rows++
+		m.add(1, int64(payload))
 		if i%10 == 0 {
 			t.progress("speedtest", "transactions", float64(i)/float64(n)*100)
 		}
@@ -400,7 +479,7 @@ func (t *Tester) txPhase(ctx context.Context, db *sql.DB, qname string, n, paylo
 // rollbackPhase is a correctness check, not a benchmark: a rolled back insert
 // must leave nothing behind. It catches a table that silently is not InnoDB.
 func rollbackPhase(ctx context.Context, db *sql.DB, qname string) Phase {
-	p := Phase{Name: "Transactions: rollback is honoured"}
+	p := Phase{Key: "rollback", Name: "Transactions: rollback is honoured"}
 	const sentinel = 424242
 	start := time.Now()
 	tx, err := db.BeginTx(ctx, nil)
@@ -434,7 +513,7 @@ func rollbackPhase(ctx context.Context, db *sql.DB, qname string) Phase {
 }
 
 func (t *Tester) deletePhase(ctx context.Context, db *sql.DB, qname string) Phase {
-	p := Phase{Name: "Delete: empty the table"}
+	p := Phase{Key: "delete", Name: "Delete: empty the table"}
 	start := time.Now()
 	r, err := db.ExecContext(ctx, "DELETE FROM "+qname)
 	if err != nil {

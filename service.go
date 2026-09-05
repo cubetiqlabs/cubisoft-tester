@@ -56,6 +56,14 @@ func (t *Tester) Cancel() {
 	}
 }
 
+// emit publishes a live speed-test sample. Dropped when there is no app, which
+// is how the tests run.
+func (t *Tester) emit(s Sample) {
+	if app := application.Get(); app != nil {
+		app.Event.Emit("speed:sample", s)
+	}
+}
+
 func (t *Tester) progress(kind, message string, pct float64) {
 	app := application.Get()
 	if app == nil {
